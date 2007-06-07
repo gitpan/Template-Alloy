@@ -1,0 +1,12 @@
+1.001
+      2007-06-07
+        * Added strref cache support
+        * Added compile_perl support.
+        * Added support of Text::Tmpl style templates
+        * Added support for Velocity style templates
+        * More edge cases
+        * More sample syntax
+
+1.000
+      2007-05-25
+        * First from CGI::Ex::Template version 2.13
