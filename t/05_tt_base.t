@@ -2,7 +2,7 @@
 
 =head1 NAME
 
-00_base.t - Test the basic language functionality of Template::Alloy - including many edge cases
+05_tt_base.t - Test the basic language functionality of Template::Alloy - including many edge cases
 
 =cut
 
@@ -16,7 +16,7 @@ BEGIN {
 };
 
 use strict;
-use Test::More tests => ! $is_tt ? 1863 : 625;
+use Test::More tests => ! $is_tt ? 1879 : 633;
 use constant test_taint => 0 && eval { require Taint::Runtime };
 
 use_ok($module);
@@ -86,7 +86,8 @@ sub process_ok { # process the value and say if it was ok
 
 my $obj = Foo2->new;
 my $vars;
-
+my $stash = {foo => 'Stash', bingo => 'bango'};
+$stash = Template::Stash->new($stash) if eval{require Template::Stash};
 
 for $compile_perl (($is_tt) ? (0) : (0, 1)) {
     my $is_compile_perl = "compile perl ($compile_perl)";
@@ -98,6 +99,13 @@ process_ok("[% foo %]" => "");
 process_ok("[% foo %]" => "7",       {foo => 7});
 process_ok("[% foo %]" => "7",       {tt_config => [VARIABLES => {foo => 7}]});
 process_ok("[% foo %]" => "7",       {tt_config => [PRE_DEFINE => {foo => 7}]});
+process_ok("[% foo %]" => "Stash",   {tt_config => [STASH      => $stash]});
+process_ok("[% foo %]" => "V",       {tt_config => [VARIABLES => {foo => 'V'}, PRE_DEFINE => {foo => 'PD'}]});
+process_ok("[% bar %]" => "",        {tt_config => [VARIABLES => {foo => 'V'}, PRE_DEFINE => {bar => 'PD'}]});
+process_ok("[% foo %]" => "Stash",   {tt_config => [VARIABLES => {foo => 'V'}, STASH      => $stash]});
+process_ok("[% bar %]" => "",        {tt_config => [VARIABLES => {bar => 'V'}, STASH      => $stash]});
+process_ok("[% foo %]" => "Stash",   {tt_config => [STASH     => $stash,       VARIABLES  => {foo => 'V'}]});
+process_ok("[% foo %]" => "Stash",   {tt_config => [STASH     => $stash,       PRE_DEFINE => {foo => 'PD'}]});
 process_ok("[% foo %][% foo %][% foo %]" => "777", {foo => 7});
 process_ok("[% foo() %]" => "7",     {foo => 7});
 process_ok("[% foo.bar %]" => "");
@@ -1190,6 +1198,7 @@ process_ok("[% TRY %][% PERL %][% END %][% CATCH ; error; END %]" => 'perl error
 process_ok("[% PERL %] print \"[% one %]\" [% END %]" => 'ONE', {one => 'ONE', tt_config => ['EVAL_PERL' => 1]});
 process_ok("[% PERL %] print \$stash->get('one') [% END %]" => 'ONE', {one => 'ONE', tt_config => ['EVAL_PERL' => 1]});
 process_ok("[% PERL %] print \$stash->set('a.b.c', 7) [% END %][% a.b.c %]" => '77', {tt_config => ['EVAL_PERL' => 1]});
+process_ok("[% RAWPERL %]\$output .= 'interesting'[% END %]" => 'interesting', {tt_config => ['EVAL_PERL' => 1]});
 
 ###----------------------------------------------------------------###
 print "### recursion prevention ############################ $is_compile_perl\n";

@@ -20,7 +20,7 @@ sub parse_tree_velocity {
     my $self    = shift;
     my $str_ref = shift;
     if (! $str_ref || ! defined $$str_ref) {
-        $self->throw('parse.no_string', "No string or undefined during parse");
+        $self->throw('parse.no_string', "No string or undefined during parse", undef, 1);
     }
 
     local $self->{'V2EQUALS'}    = $self->{'V2EQUALS'} || 0;
@@ -57,7 +57,7 @@ sub parse_tree_velocity {
     my $pre_chomp;
     my $node;
     my $macro_block;
-    local pos $$str_ref = 0;
+    local pos($$str_ref) = 0;
 
     while (1) {
         ### allow for #set(foo = PROCESS foo)
