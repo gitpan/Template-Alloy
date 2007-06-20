@@ -166,18 +166,21 @@ sub parse_tree_hte {
         ### parse remaining tag details
         if (! $is_close) {
             ### handle HT style nodes
-            if ($func =~ /^(IF|ELSIF|UNLESS|LOOP|VAR|INCLUDE)$/) {
+            if ($func =~ /^(IF|ELSIF|ELSE|UNLESS|LOOP|VAR|INCLUDE)$/) {
                 $func = $node->[0] = 'GET' if $func eq 'VAR';
 
                 ### handle EXPR attribute
-                if ($$str_ref =~ m{ \G [Ee][Xx][Pp][Rr] \s*=\s* ([\"\']?) \s* }gcx) {
+                if ($func eq 'ELSE') {
+                    # do nothing
+                } elsif ($$str_ref =~ m{ \G [Ee][Xx][Pp][Rr] \s*=\s* ([\"\']?) \s* }gcx) {
                     if (! $allow_expr) {
                         $self->throw('parse', 'EXPR are not allowed without hte mode', undef, pos($$str_ref));
                     }
                     my $quote = $1;
                     $self->{'_end_tag'} = $comment ? qr{$quote\s*([+=~-]?)-->} : qr{$quote\s*([+=~-]?)>};
-                    $node->[3] = $self->parse_expr($str_ref)
-                        || $self->throw('parse', 'Error while looking for EXPR', undef, pos($$str_ref));
+                    $node->[3] = $self->parse_expr($str_ref);
+                    $self->throw('parse', 'Error while looking for EXPR', undef, pos($$str_ref))
+                        if ! defined($node->[3]);
 
                 ### handle "normal" NAME attributes
                 } else {
@@ -207,8 +210,8 @@ sub parse_tree_hte {
                         }
                     }
 
-                    $self->throw('parse', 'Error while looking for NAME', undef, pos($$str_ref)) if ! $name;
-                    $node->[3] = $func eq 'INCLUDE' ? $name : [($self->{'CASE_SENSITIVE'} ? $name : lc $name), 0]; # set the variable
+                    $self->throw('parse', 'Error while looking for NAME', undef, pos($$str_ref)) if ! defined($name) || ! length($name);
+                    $node->[3] = $func eq 'INCLUDE' ? $name : [$name, 0]; # set the variable
                     $node->[3] = [[undef, '||', $node->[3], $default], 0] if $default;
 
                     ### dress up node before finishing
