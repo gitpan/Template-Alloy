@@ -14,7 +14,7 @@ use Template::Alloy::VMethod  qw(define_vmethod $SCALAR_OPS $FILTER_OPS $LIST_OP
 
 use vars qw($VERSION);
 BEGIN {
-    $VERSION            = '1.005';
+    $VERSION            = '1.006';
 };
 our $QR_PRIVATE         = qr/^[_.]/;
 our $WHILE_MAX          = 1000;
@@ -57,7 +57,7 @@ sub AUTOLOAD {
 
 sub can {
     my ($self, $meth) = @_;
-    __PACKAGE__->import($_) if $_ = $ROLEMAP->{$meth};
+    __PACKAGE__->import($ROLEMAP->{$meth}) if $ROLEMAP->{$meth};
     return $self->SUPER::can($meth);
 }
 
