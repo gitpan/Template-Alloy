@@ -18,9 +18,8 @@ BEGIN {
     $is_ht  = $module eq 'HTML::Template';
     $is_ta = $module eq 'Template::Alloy';
 };
-
 use strict;
-use Test::More tests => ($is_ta) ? 220 : ($is_ht) ? 65 : 75;
+use Test::More tests => ($is_ta) ? 240 : ($is_ht) ? 75 : 82;
 use constant test_taint => 0 && eval { require Taint::Runtime };
 
 use_ok($module);
@@ -101,7 +100,12 @@ process_ok("<TMPL_VAR NAME=foo>" => "FOO", {foo => "FOO"});
 process_ok("<TMPL_VAR NAME=\"foo\">" => "FOO", {foo => "FOO"});
 process_ok("<TMPL_VAR NAME='foo'>" => "FOO", {foo => "FOO"});
 process_ok("<TMPL_VAR NAME='foo' >" => "FOO", {foo => "FOO"});
+process_ok("<TMPL_VAR \"foo\">" => "FOO", {foo => "FOO"});
+process_ok("<TMPL_VAR \'foo\'>" => "FOO", {foo => "FOO"});
 process_ok("<TMPL_VAR foo >" => "FOO", {foo => "FOO"});
+process_ok("<TMPL_VAR NAME=foo >" => "FOO", {foo => "FOO"});
+process_ok("<TMPL_VAR NAME=\"foo\" >" => "FOO", {foo => "FOO"});
+process_ok("<TMPL_VAR \"foo\" >" => "FOO", {foo => "FOO"});
 
 process_ok("<TMPL_VAR                 foo>" => "<>",       {foo => "<>"});
 process_ok("<TMPL_VAR                 foo>" => "&lt;&gt;", {foo => "<>", tt_config => [default_escape => 'html']});
@@ -121,6 +125,8 @@ process_ok("<TMPL_VAR ESCAPE=html NAME=foo>" => "&lt;&gt;", {foo => "<>"});
 process_ok("<TMPL_VAR ESCAPE=html NAME=foo ESCAPE=js>" => "&lt;&gt;", {foo => "<>"});
 
 process_ok("<TMPL_VAR DEFAULT=bar NAME=foo>" => "FOO", {foo => "FOO", bar => "BAR"});
+process_ok("<TMPL_VAR DEFAULT=bar foo>" => "FOO", {foo => "FOO", bar => "BAR"});
+process_ok("<TMPL_VAR DEFAULT=bar \"foo\">" => "FOO", {foo => "FOO", bar => "BAR"});
 process_ok("<TMPL_VAR DEFAULT=bar NAME=foo>d" => "bard", {foo => undef, bar => "BAR"});
 process_ok("<TMPL_VAR NAME=foo DEFAULT=bar>d" => "bard", {foo => undef, bar => "BAR"});
 process_ok("<TMPL_VAR DEFAULT=bar NAME=foo DEFAULT=bing>d" => "bard");
@@ -138,6 +144,7 @@ process_ok("<TMPL_IF foo>bar<TMPL_ELSE>bing</TMPL_IF>" => "bar",  {foo => '1'});
 process_ok("<TMPL_IF name=foo>bar<TMPL_ELSE>bing</TMPL_IF>" => "bar",  {foo => '1'});
 process_ok("<TMPL_IF name='foo'>bar<TMPL_ELSE>bing</TMPL_IF>" => "bar",  {foo => '1'});
 process_ok("<TMPL_IF name=\"foo\">bar<TMPL_ELSE>bing</TMPL_IF>" => "bar",  {foo => '1'});
+process_ok("<TMPL_IF \"foo\">bar<TMPL_ELSE>bing</TMPL_IF>" => "bar",  {foo => '1'});
 process_ok("<TMPL_IF expr=\"73\">bar<TMPL_ELSE>bing</TMPL_IF>" => "bar")     if ! $is_ht;
 process_ok("<TMPL_IF expr=\"1 - 1\">bar<TMPL_ELSE>bing</TMPL_IF>" => "bing") if ! $is_ht;
 process_ok("<TMPL_IF expr=\"73\" >bar<TMPL_ELSE>bing</TMPL_IF>" => "bar")    if ! $is_ht;
@@ -160,7 +167,9 @@ process_ok("<TMPL_INCLUDE blah>bar" => "");
 process_ok("<TMPL_INCLUDE foo.ht>" => "Good Day!");
 process_ok("<TMPL_INCLUDE $test_dir/foo.ht>" => "Good Day!", {tt_config => [path => '']});
 process_ok("<TMPL_INCLUDE NAME=foo.ht>" => "Good Day!");
+process_ok("<TMPL_INCLUDE NAME=\"foo.ht\">" => "Good Day!");
 process_ok("<TMPL_INCLUDE NAME='foo.ht'>" => "Good Day!");
+process_ok("<TMPL_INCLUDE \"foo.ht\">" => "Good Day!");
 process_ok("<TMPL_INCLUDE NAME='foo.ht'>" => "", {tt_config => [no_includes => 1]});
 
 process_ok("<TMPL_INCLUDE ESCAPE=HTML NAME='foo.ht'>" => "");
@@ -179,13 +188,13 @@ print "### EXPR ############################################ $is_compile_perl\n"
 process_ok("<TMPL_VAR EXPR=\"sprintf('%d', foo)\">" => "777", {foo => "777"}) if ! $is_ht;
 process_ok("<TMPL_VAR EXPR=\"sprintf('%d', foo)\">" => "777", {foo => "777"}) if ! $is_ht;
 process_ok("<TMPL_VAR EXPR='sprintf(\"%d\", foo)'>" => "777", {foo => "777"}) if ! $is_ht && ! $is_hte; # odd that HTE can't parse this
-process_ok("<TMPL_VAR EXPR=\"sprintf(\"%d\", foo)\">" => "777", {foo => "777"}) if ! $is_ht;
+process_ok("<TMPL_VAR EXPR=\"sprintf(\"%d\", foo)\">" => "777", {foo => "777"}) if ! $is_ht && ! $is_hte;
 process_ok("<TMPL_VAR EXPR=sprintf(\"%d\", foo)>" => "777", {foo => "777"}) if ! $is_ht && ! $is_hte;
 process_ok("<TMPL_VAR EXPR=\"sprintf('%s', foo)\">" => "<>", {foo => "<>"}) if ! $is_ht;
-process_ok("<TMPL_VAR ESCAPE=HTML EXPR=\"sprintf('%s', foo)\">" => "", {foo => "<>"});
+process_ok("<TMPL_VAR ESCAPE=HTML EXPR=\"sprintf('%s', foo)\">" => "", {foo => "<>"}) if ! $is_hte;
 process_ok("<TMPL_VAR DEFAULT=bar EXPR=foo>" => "", {foo => "FOO", bar => "BAR"});
 
-process_ok("<!--TMPL_VAR EXPR=\"foo\"-->" => "FOO", {foo => "FOO"}) if ! $is_ht;;
+process_ok("<!--TMPL_VAR EXPR=\"foo\"-->" => "FOO", {foo => "FOO"}) if ! $is_ht && ! $is_hte;
 
 ###----------------------------------------------------------------###
 print "### LOOP ############################################ $is_compile_perl\n";

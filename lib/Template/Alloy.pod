@@ -2823,8 +2823,7 @@ Provided by the Play role.
 Given a filename or a string reference will return a "document" hashref
 hash that contains the parsed tree.
 
-  my $doc = $self->load_template($file)
-      || $self->throw('undef', "Zero length content");
+    my $doc = $self->load_template($file); # errors die
 
 This method handles the in-memory caching of the document.
 
@@ -2957,6 +2956,8 @@ Thanks to the Apache Velocity guys.
 
 
 Thanks to Ben Grimm for a patch to allow passing a parsed document to the ->process method.
+
+Thanks to David Warring for finding a parse error in HTE syntax.
 
 =head1 AUTHOR
 

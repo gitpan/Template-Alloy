@@ -14,7 +14,7 @@ use Template::Alloy::VMethod  qw(define_vmethod $SCALAR_OPS $FILTER_OPS $LIST_OP
 
 use vars qw($VERSION);
 BEGIN {
-    $VERSION            = '1.006';
+    $VERSION            = '1.007';
 };
 our $QR_PRIVATE         = qr/^[_.]/;
 our $WHILE_MAX          = 1000;
@@ -103,14 +103,7 @@ sub new {
       @{ $args }{ map { uc $_ } @keys } = delete @{ $args }{ @keys };
   }
 
-  my $self = bless $args, $class;
-
-  if ($self->{'DEBUG'}) { # "enable" some types of tt style debugging
-      $self->{'_debug_dirs'}  = 1 if $self->{'DEBUG'} =~ /^\d+$/ ? $self->{'DEBUG'} & 8 : $self->{'DEBUG'} =~ /dirs|all/;
-      $self->{'_debug_undef'} = 1 if $self->{'DEBUG'} =~ /^\d+$/ ? $self->{'DEBUG'} & 2 : $self->{'DEBUG'} =~ /undef|all/;
-  }
-
-  return $self;
+  return bless $args, $class;
 }
 
 ###----------------------------------------------------------------###
@@ -120,6 +113,7 @@ sub process_simple {
     my $in   = shift || die "Missing input";
     my $swap = shift || die "Missing variable hash";
     my $out  = shift || die "Missing output string ref";
+    delete $self->{'error'};
 
     eval {
         delete $self->{'_debug_off'};
@@ -147,14 +141,7 @@ sub _process {
     ### parse and execute
     my $doc;
     eval {
-        ### handed us a precompiled document
-        if (ref($file) eq 'HASH') {
-            $doc = $file;
-
-        ### load the document
-        } else {
-            $doc = $self->load_template($file) || $self->throw('undef', "Zero length content");;
-        }
+        $doc = (ref($file) eq 'HASH') ? $file : $self->load_template($file);
 
         ### prevent recursion
         $self->throw('file', "recursion into '$doc->{name}'")
@@ -195,16 +182,14 @@ sub _process {
 
 sub load_template {
     my ($self, $file) = @_;
+    $self->throw('undef', 'Undefined file passed to load_template') if ! defined $file;
 
     my $docs = $self->{'GLOBAL_CACHE'} || ($self->{'_documents'} ||= {});
     $docs = $GLOBAL_CACHE if ! ref $docs;
 
-    my $doc;
-    if (! defined $file) {
-        return;
-
     ### looks like a scalar ref
-    } elsif (ref $file) {
+    my $doc;
+    if (ref $file) {
         return $file if ref $file eq 'HASH';
 
         if (! defined($self->{'CACHE_STR_REFS'}) || $self->{'CACHE_STR_REFS'}) {

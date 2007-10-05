@@ -9,7 +9,7 @@
 use strict;
 use warnings;
 
-use Test::More tests => 40;
+use Test::More tests => 43;
 
 ###----------------------------------------------------------------###
 ### loading via can, use, and import
@@ -76,6 +76,14 @@ ok(eval "use Template::Alloy 'Template'; 1", "It can be imported ($@)");
 ok($INC{'Template.pm'},                       "Template is now loaded");
 ok(Template->isa('Template::Alloy'),         "Template is a Template::Alloy");
 ok(eval "use Template::Alloy 'Template'; 1", "It can be imported twice");
+
+###----------------------------------------------------------------###
+
+ok(! eval { Template::Alloy->flabbergast } && $@, "Got an error on invalid methods ($@)");
+my $meth = '';
+ok(! eval { Template::Alloy->$meth() } && $@, "Got an error on invalid methods ($@)");
+$meth = 'foo&bar';
+ok(! eval { Template::Alloy->$meth() } && $@, "Got an error on invalid methods ($@)");
 
 ###----------------------------------------------------------------###
 
