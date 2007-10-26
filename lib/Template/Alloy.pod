@@ -1020,6 +1020,7 @@ The following compile time configuration options may be set:
     ANYCASE
     AUTO_EVAL
     CACHE_STR_REFS
+    ENCODING
     INTERPOLATE
     POST_CHOMP
     PRE_CHOMP
@@ -1300,6 +1301,9 @@ be used on all templates.
 
     [% INCLUDE "path/to/template.html",
                "path/to/template2.html" a = "An arg" b = "Another arg" %]
+
+On Perl 5.6 on some platforms there may be some issues with the variable
+localization.  There is no problem on 5.8 and greater.
 
 =item C<INSERT>
 
@@ -2164,6 +2168,16 @@ Any of the Data::Dumper configuration items may be passed.
 
 =back
 
+=item ENCODING
+
+Default undef.  If set, and if Perl version is greater than or equal to
+5.7.3 (when Encode.pm was first included), then Encode::decode will
+be called everytime a template file is processed and will be passed
+the value of ENCODING and text from the template.
+
+This item can also be set using [% CONFIG ENCODING => encoding %] before
+calling INCLUDE or PROCESS directives to change encodings on the fly.
+
 =item END_TAG
 
 Set a string to use as the closing delimiter for TT.  Default is "%]".
@@ -2958,6 +2972,8 @@ Thanks to the Apache Velocity guys.
 Thanks to Ben Grimm for a patch to allow passing a parsed document to the ->process method.
 
 Thanks to David Warring for finding a parse error in HTE syntax.
+
+Thanks to Carl Franks for adding the base ENCODING support.
 
 =head1 AUTHOR
 

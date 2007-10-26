@@ -127,8 +127,7 @@ sub compile_tree {
 
         # text nodes are just the bare text
         if (! ref $node) {
-            $node =~ s/\\/\\\\/g;
-            $node =~ s/\'/\\\'/g;
+            $node =~ s/([\'\\])/\\$1/g;
             $code .= "\n\n${indent}\$\$out_ref .= '$node';";
             next;
         }

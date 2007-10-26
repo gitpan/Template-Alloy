@@ -1,3 +1,10 @@
+1.008
+      2007-10-26
+        * Fix split_paths to work with objects
+        * Make 5.6 a requirement
+        * Add patches for ENCODING (thanks to Carl Franks)
+        * Fix broken tests on low perl version
+
 1.007
       2007-10-04
         * Patch to bench_various_templaters.pl to fix HTC_file test (Tina Müller via RT)

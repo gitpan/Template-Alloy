@@ -1,3 +1,4 @@
+use 5.006;
 use ExtUtils::MakeMaker;
 
 ###----------------------------------------------------------------###
@@ -11,6 +12,9 @@ WriteMakefile(
               ABSTRACT_FROM => "lib/Template/Alloy.pod",
               VERSION_FROM  => "lib/Template/Alloy.pm",
               INSTALLDIRS   => 'site',
+              PREREQ_PM     => {
+                  'Digest::MD5' => 1,
+              },
               
               dist          => {
                 DIST_DEFAULT => 'all tardist',

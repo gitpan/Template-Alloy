@@ -8,13 +8,14 @@ package Template::Alloy;
 
 use strict;
 use warnings;
+use 5.006;
 use Template::Alloy::Exception;
 use Template::Alloy::Operator qw(play_operator define_operator);
 use Template::Alloy::VMethod  qw(define_vmethod $SCALAR_OPS $FILTER_OPS $LIST_OPS $HASH_OPS $VOBJS);
 
 use vars qw($VERSION);
 BEGIN {
-    $VERSION            = '1.007';
+    $VERSION            = '1.008';
 };
 our $QR_PRIVATE         = qr/^[_.]/;
 our $WHILE_MAX          = 1000;
@@ -22,7 +23,7 @@ our $MAX_EVAL_RECURSE   = 50;
 our $MAX_MACRO_RECURSE  = 50;
 our $STAT_TTL           = 1;
 our $QR_INDEX           = '(?:\d*\.\d+ | \d+)';
-our @CONFIG_COMPILETIME = qw(SYNTAX CACHE_STR_REFS ANYCASE INTERPOLATE PRE_CHOMP POST_CHOMP
+our @CONFIG_COMPILETIME = qw(SYNTAX CACHE_STR_REFS ANYCASE INTERPOLATE PRE_CHOMP POST_CHOMP ENCODING
                              SEMICOLONS V1DOLLAR V2PIPE V2EQUALS AUTO_EVAL SHOW_UNDEFINED_INTERP);
 our @CONFIG_RUNTIME     = qw(DUMP VMETHOD_FUNCTIONS);
 our $EVAL_CONFIG        = {map {$_ => 1} @CONFIG_COMPILETIME, @CONFIG_RUNTIME};
@@ -410,7 +411,11 @@ sub load_perl {
         }
         open(my $fh, ">", $doc->{'_compile_filename'}) || $self->throw('compile', "Could not open file \"$doc->{'_compile_filename'}\" for writing: $!");
         ### todo - think about locking
-        print $fh $$perl;
+        if ($self->{'ENCODING'} && eval { require Encode }) {
+            print $fh Encode::encode($self->{'ENCODING'}, $$perl);
+        } else {
+            print $fh $$perl;
+        }
         close $fh;
         utime $doc->{'modtime'}, $doc->{'modtime'}, $doc->{'_compile_filename'};
     }
@@ -779,16 +784,26 @@ sub include_paths {
 
 sub split_paths {
     my ($self, $path) = @_;
-    return $path if ref $path;
+    return $path if UNIVERSAL::isa($path, 'ARRAY');
     my $delim = $self->{'DELIMITER'} || ':';
     $delim = ($delim eq ':' && $^O eq 'MSWin32') ? qr|:(?!/)| : qr|\Q$delim\E|;
-    return [split $delim, $path];
+    return [split $delim, "$path"]; # allow objects to stringify as necessary
 }
 
 sub slurp {
     my ($self, $file) = @_;
     open(my $fh, '<', $file) || $self->throw('file', "$file couldn't be opened: $!");
     read $fh, my $txt, -s $file;
+
+    if ($self->{'ENCODING'}) { # thanks to Carl Franks for this addition
+        eval { require Encode };
+        if ($@) {
+            warn "Encode module not found, 'ENCODING' config only available on perl >= 5.7.3\n$@";
+        } else {
+            $txt = Encode::decode($self->{'ENCODING'}, $txt);
+        }
+    }
+
     return \$txt;
 }
 
@@ -904,14 +919,12 @@ sub get_line_number_by_index {
 sub ast_string {
     my ($self, $var) = @_;
 
-    if (! ref $var) {
-        return 'undef' if ! defined $var;
-        return $var if $var =~ /^(-?[1-9]\d{0,13}|0)$/;
-        $var =~ s/([\'\\])/\\$1/g;
-        return "'$var'";
-    }
+    return 'undef' if ! defined $var;
+    return '['.join(', ', map { $self->ast_string($_) } @$var).']' if ref $var;
+    return $var if $var =~ /^(-?[1-9]\d{0,13}|0)$/;
 
-    return '['.join(', ', map { $self->ast_string($_) } @$var).']';
+    $var =~ s/([\'\\])/\\$1/g;
+    return "'$var'";
 }
 
 1;
