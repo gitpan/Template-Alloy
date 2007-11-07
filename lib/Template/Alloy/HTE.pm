@@ -364,7 +364,7 @@ sub param {
     if (@_ == 1) {
         my $key = shift;
         if (ref($key) ne 'HASH') {
-            $key = lc $key if $self->{'CASE_SENSITIVE'};
+            $key = lc $key if ! $self->{'CASE_SENSITIVE'};
             return $self->{'_vars'}->{$key};
         }
         $args = [%$key];
@@ -374,7 +374,7 @@ sub param {
     }
     while (@$args) {
         my $key = shift @$args;
-        $key = lc $key if $self->{'CASE_SENSITIVE'};
+        $key = lc $key if ! $self->{'CASE_SENSITIVE'};
         $self->{'_vars'}->{$key} = shift @$args;
     }
     return;
@@ -408,7 +408,7 @@ sub output {
     if (my $ref = $self->{'ASSOCIATE'}) {
         foreach my $obj (ref($ref) eq 'ARRAY' ? $ref : @$ref) {
             foreach my $key ($obj->param) {
-                $self->{'_vars'}->{$self->{'CASE_SENSITIVE'} ? lc($key) : $key} = $obj->param($key);
+                $self->{'_vars'}->{$self->{'CASE_SENSITIVE'} ? $key : lc($key)} = $obj->param($key);
             }
         }
     }
@@ -421,14 +421,15 @@ sub output {
     my $stat_ttl    = (! $self->{'BLIND_CACHE'}) ? undef : 60; # not sure how high to set the blind cache
     $cache_size = undef if $self->{'DOUBLE_FILE_CACHE'};
 
-    local $self->{'SYNTAX'}       = $self->{'SYNTAX'} || 'hte';
-    local $self->{'GLOBAL_CACHE'} = $self->{'CACHE'};
-    local $self->{'CACHE_SIZE'}   = $cache_size;
-    local $self->{'STAT_TTL'}     = $stat_ttl;
-    local $self->{'COMPILE_DIR'}  = $compile_dir;
-    local $self->{'ABSOLUTE'}     = 1;
-    local $self->{'RELATIVE'}     = 1;
-    local $self->{'INCLUDE_PATH'} = $self->{'PATH'};
+    local $self->{'SYNTAX'}         = $self->{'SYNTAX'} || 'hte';
+    local $self->{'GLOBAL_CACHE'}   = $self->{'CACHE'};
+    local $self->{'ADD_LOCAL_PATH'} = defined($self->{'ADD_LOCAL_PATH'}) ? $self->{'ADD_LOCAL_PATH'} : 1;
+    local $self->{'CACHE_SIZE'}     = $cache_size;
+    local $self->{'STAT_TTL'}       = $stat_ttl;
+    local $self->{'COMPILE_DIR'}    = $compile_dir;
+    local $self->{'ABSOLUTE'}       = 1;
+    local $self->{'RELATIVE'}       = 1;
+    local $self->{'INCLUDE_PATH'}   = $self->{'PATH'};
     local $self->{'LOWER_CASE_VAR_FALLBACK'} = ! $self->{'CASE_SENSITIVE'}; # un-smart HTML::Template default
     local $Template::Alloy::QR_PRIVATE = undef;
 
