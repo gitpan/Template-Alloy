@@ -165,11 +165,12 @@ Once at the AST stage, there are two modes of operation.  Alloy can
 either operate directly on the AST using the Play role, or it can
 compile the AST to perl code via the Compile role, and then execute
 the code.  To use the perl code route, you must set the COMPILE_PERL
-flag to 1.  If you are running in a cached environment such as
-mod_perl, this is the fastest option.  If you are running in a
-non-cached environment, the Playing or the AST is generally faster.
-The AST method is also more secure as cached AST won't ever eval
-"perl" (assuming PERL blocks are disabled).
+flag to 1.  If you are running in a cached-in-memory environment such
+as mod_perl, this is the fastest option.  If you are running in a
+non-cached-in-memory environment, then using the Play role to run the
+AST is generally faster.  The AST method is also more secure as cached
+AST won't ever eval any "perl" (assuming PERL blocks are disabled -
+which is the default).
 
 =head1 ROLES
 
@@ -205,7 +206,7 @@ either the role name or a method supplied by that role.
     use Template::Alloy qw(parse_tree play_tree compile_tree process);
 
 Note: importing roles by method names does not import them into
-the current namespace - it is autoloading the role and methods into the
+that namespace - it is autoloading the role and methods into the
 Template::Alloy namespace.  To help make this more clear you may use
 the following syntax as well.
 
@@ -238,10 +239,10 @@ other template modules.  It is able to do this because it supports the
 majority of the interface of the other template systems.  You
 can do this in the following way:
 
-    use Template::Alloy qw('Text::Tmpl', 'HTML::Template');
+    use Template::Alloy qw(Text::Tmpl HTML::Template);
 
     # or
-    use Template::Alloy load => qw('Text::Tmpl', 'HTML::Template');
+    use Template::Alloy load => qw(Text::Tmpl HTML::Template);
 
     # or
     use Template::Alloy
@@ -2486,6 +2487,51 @@ seconds until a cached in memory document is compared to the file
 system for modifications.  Setting this number higher will allow for
 fewer file system accesses.  Setting it to a negative number will allow
 for the file system to be checked every hit.
+
+=item STREAM
+
+Defaults to false.  If set to true, generated template content will be
+printed to the currently selected filehandle (default is STDOUT) as
+soon as it is ready - there will be no buffering of the output.
+
+The Stream role uses the Play role's directives (non-compiled_perl).
+
+All directives and configuration work, except for the following
+exceptions:
+
+=over 4
+
+=item CLEAR directive
+
+Because the output is not buffered - the CLEAR directive would have no
+effect.  The CLEAR directive will throw an error when STREAM is on.
+
+=item TRIM configuration
+
+Because the output is not buffered - trim operations cannot be played
+on the output buffers.
+
+=item WRAPPER configuration/directive
+
+The WRAPPER configuration and directive items effectively turn off
+STREAM since the WRAPPERS are generated in reverse order and because
+the content is inserted into the middle of the WRAPPERS.  WRAPPERS
+will still work, they just won't stream.
+
+=item VARIOUS errors
+
+Because the template is streaming, items that cause errors my result
+in partially printed pages - since the error would occur part way
+through the print.
+
+=back
+
+All output is printed directly to the currently selected filehandle
+(defaults to STDOUT) via the CORE::print function.  Any output
+parameter passed to process or process_simple will be ignored.
+
+If you would like the output to go to another handle, you will need to
+select that handle, process the template, and re-select STDOUT.
 
 =item SYNTAX (not in TT)
 

@@ -1,14 +1,11 @@
---- #YAML:1.0
-name:                Template-Alloy
-version:             1.009
-abstract:            TT2/3, HT, HTE, Tmpl, and Velocity Engine
-license:             ~
-generated_by:        ExtUtils::MakeMaker version 6.36
-distribution_type:   module
-requires:     
+# http://module-build.sourceforge.net/META-spec.html
+#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
+name:         Template-Alloy
+version:      1.010
+version_from: lib/Template/Alloy.pm
+installdirs:  site
+requires:
     Digest::MD5:                   1
-meta-spec:
-    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
-    version: 1.2
-author:
-    - Paul Seamons
+
+distribution_type: module
+generated_by: ExtUtils::MakeMaker version 6.30_01
