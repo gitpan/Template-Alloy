@@ -48,7 +48,7 @@ our $DIRECTIVES = {
     PERL    => \&play_PERL,
     PROCESS => \&play_PROCESS,
     RAWPERL => \&play_RAWPERL,
-    RETURN  => \&play_control,
+    RETURN  => \&play_RETURN,
     SET     => \&play_SET,
     STOP    => \&play_control,
     SWITCH  => \&play_SWITCH,
@@ -427,11 +427,18 @@ sub play_MACRO {
         $sub_tree = $sub_tree->[0]->[4];
     }
 
-    my $self_copy = $self;
-    eval {require Scalar::Util; Scalar::Util::weaken($self_copy)};
-
     ### install a closure in the stash that will handle the macro
-    $self->set_variable($name, sub {
+    $self->set_variable($name, $self->_macro_sub($args, $sub_tree, $out_ref));
+
+    return;
+}
+
+sub _macro_sub {
+    my ($self, $args, $sub_tree, $out_ref) = @_;
+
+    my $self_copy = $self;
+
+    my $sub = sub {
         ### macros localize
         my $copy = $self_copy->{'_vars'};
         local $self_copy->{'_vars'}= {%$copy};
@@ -452,13 +459,21 @@ sub play_MACRO {
             $self_copy->set_variable([$name, 0], $named->{$name});
         }
 
+        local $self->{'STREAM'} = undef;
+
         ### finally - run the sub tree
         my $out = '';
-        $self_copy->play_tree($sub_tree, \$out);
+        eval { $self_copy->play_tree($sub_tree, \$out) };
+        if (my $err = $@) {
+            die $err if $err->type ne 'return';
+            return $err->info->{'return_val'} if UNIVERSAL::isa($err->info, 'HASH');
+            return;
+        }
         return $out;
-    });
+    };
 
-    return;
+    eval {require Scalar::Util; Scalar::Util::weaken($self_copy)};
+    return $sub;
 }
 
 sub play_META {
@@ -549,23 +564,13 @@ sub play_PROCESS {
         $self->set_variable($key, $val);
     }
 
-    local $self->{'INCLUDE_PATHS'} = do {
-        my $ref = $self->include_paths;
-        if ($self->{'ADD_LOCAL_PATH'}
-            && $self->{'_component'}->{'_filename'}
-            && $self->{'_component'}->{'_filename'} =~ m|^(.+)/[^/]+$|) {
-            $ref = ($self->{'ADD_LOCAL_PATH'} < 0) ? [@$ref, $1] : [$1, @$ref];
-        }
-        $ref;
-    };
-
     ### iterate on any passed block or filename
     foreach my $filename (@files) {
         next if ! defined $filename;
         my $out = ''; # have temp item to allow clear to correctly clear
 
         ### normal blocks or filenames
-        if (! ref $filename) {
+        if (! ref($filename) || ref($filename) eq 'SCALAR') {
             eval { $self->_process($filename, $self->{'_vars'}, \$out) }; # restart the swap - passing it our current stash
 
         ### allow for $template which is used in some odd instances
@@ -643,6 +648,13 @@ sub play_RAWPERL {
     }
 
     return;
+}
+
+sub play_RETURN {
+    my ($self, $undef, $node) = @_;
+    my $var = $node->[3];
+    $var = {return_val => $self->play_expr($var)} if defined $var;
+    $self->throw('return', $var, $node);
 }
 
 sub play_SET {

@@ -161,6 +161,14 @@ sub play_operator {
         $self->set_variable($tree->[2], $val - 1);
         return $tree->[3] ? $val : $val - 1; # ->[3] is set to 1 during parsing of postfix ops
 
+    } elsif ($op eq '@()') {
+        local $self->{'CALL_CONTEXT'} = 'list';
+        return $self->play_expr($tree->[2]);
+
+    } elsif ($op eq '$()') {
+        local $self->{'CALL_CONTEXT'} = 'item';
+        return $self->play_expr($tree->[2]);
+
     } elsif ($op eq '\\') {
         my $var = $tree->[2];
 
@@ -177,6 +185,9 @@ sub play_operator {
             $last->[-1] = (ref $last->[-1] ? [@{ $last->[-1] }, @_] : [@_]) if @_;
             return $self->play_expr($last);
         } };
+    } elsif ($op eq '->') {
+        my $code = $self->_macro_sub($tree->[2], $tree->[3]);
+        return sub { $code }; # do the double sub dance
     } elsif ($op eq 'qr') {
         return $tree->[3] ? qr{(?$tree->[3]:$tree->[2])} : qr{$tree->[2]};
     }
@@ -512,6 +523,50 @@ Right associative. Lower precedence version of the '||' operator.
 
 Right associative.  Lower precedence version of the '//' operator.
 
+=item C<-E<gt>> (Not in TT2)
+
+Macro operator.  Works like the MACRO directive but can be used in
+map, sort, and grep list operations.  Syntax is based on the Perl 6
+pointy sub.  There are two diffences from the MACRO directive.  First
+is that if no argument list is specified, a default argument list with
+a single parameter named "this" will be used.  Second, the C<-E<gt>>
+operator parses its block as if it was already in a template tag.
+
+    [% foo = ->{ "Hi" } %][% foo %] => Hi
+    [% foo = ->{ this.repeat(2) } %][% foo("Hi") %] => HiHi
+    [% foo = ->(n){ n.repeat(2) } %][% foo("Hi") %] => HiHi
+    [% foo = ->(a,b){ a; "|"; b } %][% foo(2,3) %]  => 2|3
+
+    [% [0..10].grep(->{ this % 2 }).join %] => 1 3 5 7 9
+    [% ['a'..'c'].map(->{ this.upper }).join %] => A B C
+
+    [% [1,2,3].sort(->(a,b){ b <=> a }).join %] prints 3 2 1
+
+    [% c = [{k => "wow"}, {k => "wee"}, {k => "a"}] %]
+    [% c.sort(->(a,b){ a.k cmp b.k }).map(->{this.k}).join %] => a wee wow
+
+Note: Care should be used when attempting to sort large lists.
+The mini-language of Template::Alloy is a interpreted language running
+in Perl which is an interpreted language.  There are likely to be
+performance issues when trying to do low level functions such as sort
+on large lists.
+
+The RETURN directive and return item, list, and hash vmethods can be
+used to return more interesting values from a MACRO.
+
+  [% a = ->(n){ [1..n].return } %]
+  [% a(3).join %]    => 1 2 3
+  [% a(10).join %]   => 1 2 3 4 5 6 7 8 9 10
+
+The Schwartzian transform is now possible in Template::Alloy (somebody
+somewhere is rolling over in their grave).
+
+  [%- qw(Z a b D y M)
+        .map(->{ [this.lc, this].return })
+        .sort(->(a,b){a.0 cmp b.0})
+        .map(->{this.1})
+        .join %]          => a b D M y Z
+
 =item C<{}>
 
 This operator is not exposed for external use.  It is used internally
@@ -523,6 +578,19 @@ execution of the compiled template.
 This operator is not exposed for external use.  It is used internally
 by Template::Alloy to delay the creation of an array until the
 execution of the compiled template.
+
+=item C<@()>
+
+List context specifier.  Methods or functions inside this operator
+will always be called in list context and will always return an
+arrayref of the results.  See the CALL_CONTEXT configuration
+directive.
+
+=item C<$()>
+
+Item context specifier.  Methods or functions inside this operator
+will always be called in item (scalar) context.  See the CALL_CONTEXT
+configuration directive.
 
 =item C<qr>
 

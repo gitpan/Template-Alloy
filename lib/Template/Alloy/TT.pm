@@ -21,6 +21,7 @@ sub new { die "This class is a role for use by packages such as Template::Alloy"
 sub parse_tree_tt3 {
     my $self    = shift;
     my $str_ref = shift;
+    my $one_tag_only = shift() ? 1 : 0;
     if (! $str_ref || ! defined $$str_ref) {
         $self->throw('parse.no_string', "No string or undefined during parse", undef, 1);
     }
@@ -50,12 +51,15 @@ sub parse_tree_tt3 {
     my $capture;          # flag to start capture
     my $func;
     my $node;
-    local pos($$str_ref) = 0;
+    local pos($$str_ref) = 0 if ! $one_tag_only;
 
     while (1) {
         ### continue looking for information in a semi-colon delimited tag
         if ($continue) {
             $node = [undef, $continue, undef];
+
+        } elsif ($one_tag_only) {
+            $node = [undef, pos($$str_ref), undef];
 
         ### find the next opening tag
         } else {
@@ -264,6 +268,12 @@ sub parse_tree_tt3 {
 
         ### look for the closing tag
         if ($$str_ref =~ m{ \G \s* $QR_COMMENTS (?: ; \s* $QR_COMMENTS)? ([+=~-]?) $self->{'_end_tag'} }gcxs) {
+            if ($one_tag_only) {
+                $self->throw('parse', "Invalid char \"$1\" found at end of block") if $1;
+                $self->throw('parse', "Missing END directive", $state[-1], pos($$str_ref)) if @state > 0;
+                return \@tree;
+            }
+
             $post_chomp = $1 || $self->{'POST_CHOMP'};
             $post_chomp =~ y/-=~+/1230/ if $post_chomp;
             $continue = 0;
@@ -447,18 +457,18 @@ sub process {
         }
 
     };
+
+    ### clear blocks as asked (AUTO_RESET) defaults to on
+    $self->{'BLOCKS'} = $blocks if exists($self->{'AUTO_RESET'}) && ! $self->{'AUTO_RESET'};
+
     if (my $err = $@) {
         $err = $self->exception('undef', $err) if ! UNIVERSAL::can($err, 'type');
         if ($err->type !~ /stop|return|next|last|break/) {
             $self->{'error'} = $err;
+            die $err if $self->{'RAISE_ERROR'};
             return;
         }
     }
-
-
-
-    ### clear blocks as asked (AUTO_RESET) defaults to on
-    $self->{'BLOCKS'} = $blocks if exists($self->{'AUTO_RESET'}) && ! $self->{'AUTO_RESET'};
 
     ### send the content back out
     $out ||= $self->{'OUTPUT'};
@@ -964,12 +974,62 @@ included templates or eval'ed strings.
 
 =item
 
+Added @() and $() and CALL_CONTEXT.  Template::Toolkit uses a
+\concept that Alloy refers to as "smart" context.  All function
+calls or method calls of variables in Template::Toolkit are made
+in list context.  If one item is in the list, it is returned.  If
+two or more items are returned - it returns an arrayref.  This
+"does the right thing" most of the time - but can cause confusion
+in some cases and is difficult to work around without writing
+wrappers for the functions or methods in Perl.
+
+Alloy has introduced the CALL_CONTEXT configuration item which
+defaults to "smart," but can also be set to "list" or "item."
+List context will always return an arrayref from called functions
+and methods and will call in list context.  Item context will
+always call in item (scalar) context and will return one item.
+
+The @() and $() operators allow for functions embedded inside
+to use list and item context (respectively).  They are modelled
+after the corresponding Perl 6 context specifiers.  See the
+Template::Alloy::Operators perldoc and CALL_CONTEXT configuration
+documentation for more information.
+
+    [% array = @( this.get_rows ) %]
+
+    [% item  = $( this.get_something ) %]
+
+=item
+
+Added -E<gt>() MACRO operator.
+
+The -E<gt>() operator behaves similarly to the MACRO directive,
+but can be used to pass functions to map, grep, and sort vmethods.
+
+    [% MACRO foo(n) BLOCK %]Say [% n %][% END %]
+    [% foo = ->(n){ "Say $n" } %]
+
+    [% [0..10].grep(->(this % 2)).join %] prints 3 5 7 9
+    [% ['a' .. 'c'].map(->(a){ a.upper }).join %] prints A B C
+    [% [1,2,3].sort(->(a,b){ b <=> a }).join %] prints 3 2 1
+
+=item
+
+The RETURN directive can take a variable or expression as a return
+value.  Their are also "return" list, item, and hash vmethods.  Return
+will also return from an enclosing MACRO.
+
+    [% a = ->(n){ [1..n].return } %]
+
+=item
+
 Alloy does not generate Perl code.
 
 It generates an "opcode" tree.  The opcode tree is an arrayref
 of scalars and array refs nested as deeply as possible.  This "simple"
 structure could be shared TT implementations in other languages
-via JSON or YAML.
+via JSON or YAML.  You can optionally enable generating Perl code by
+setting COMPILE_PERL = 1.
 
 =item
 

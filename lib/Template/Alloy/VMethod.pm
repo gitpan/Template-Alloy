@@ -10,13 +10,19 @@ use strict;
 use warnings;
 use Template::Alloy;
 use base qw(Exporter);
-our @EXPORT_OK = qw(define_vmethod $SCALAR_OPS $FILTER_OPS $LIST_OPS $HASH_OPS $VOBJS);
+our @EXPORT_OK = qw(define_vmethod
+                    $ITEM_OPS   $ITEM_METHODS
+                    $SCALAR_OPS
+                    $LIST_OPS   $LIST_METHODS
+                    $HASH_OPS
+                    $FILTER_OPS
+                    $VOBJS);
 
 sub new { die "This class is a role for use by packages such as Template::Alloy" }
 
 ###----------------------------------------------------------------###
 
-our $SCALAR_OPS = {
+our $SCALAR_OPS = our $ITEM_OPS = {
     '0'      => sub { $_[0] },
     abs      => sub { no warnings; abs shift },
     atan2    => sub { no warnings; atan2($_[0], $_[1]) },
@@ -44,10 +50,12 @@ our $SCALAR_OPS = {
     new      => sub { defined $_[0] ? $_[0] : '' },
     null     => sub { '' },
     oct      => sub { no warnings; oct $_[0] },
+    print    => sub { no warnings; "@_" },
     rand     => sub { no warnings; rand shift },
     remove   => sub { vmethod_replace(shift, shift, '', 1) },
     repeat   => \&vmethod_repeat,
     replace  => \&vmethod_replace,
+    'return' => \&vmethod_return,
     search   => sub { my ($str, $pat) = @_; return $str if ! defined $str || ! defined $pat; return $str =~ /$pat/ },
     sin      => sub { no warnings; sin $_[0] },
     size     => sub { 1 },
@@ -65,61 +73,69 @@ our $SCALAR_OPS = {
     url      => \&vmethod_url,
 };
 
-our $FILTER_OPS = { # generally - non-dynamic filters belong in scalar ops
-    eval     => [\&filter_eval, 1],
-    evaltt   => [\&filter_eval, 1],
-    file     => [\&filter_redirect, 1],
-    redirect => [\&filter_redirect, 1],
+our $ITEM_METHODS = {
+    eval     => \&item_method_eval,
+    evaltt   => \&item_method_eval,
+    file     => \&item_method_redirect,
+    redirect => \&item_method_redirect,
 };
 
+our $FILTER_OPS = {}; # generally - non-dynamic filters belong in scalar ops
+
 our $LIST_OPS = {
-    defined => sub { return 1 if @_ == 1; defined $_[0]->[ defined($_[1]) ? $_[1] : 0 ] },
-    first   => sub { my ($ref, $i) = @_; return $ref->[0] if ! $i; return [@{$ref}[0 .. $i - 1]]},
-    fmt     => \&vmethod_fmt_list,
-    grep    => sub { no warnings; my ($ref, $pat) = @_; [grep {/$pat/} @$ref] },
-    hash    => sub { no warnings; my $list = shift; return {@$list} if ! @_; my $i = shift || 0; return {map {$i++ => $_} @$list} },
-    import  => sub { my $ref = shift; push @$ref, grep {defined} map {ref eq 'ARRAY' ? @$_ : undef} @_; '' },
-    item    => sub { $_[0]->[ $_[1] || 0 ] },
-    join    => sub { my ($ref, $join) = @_; $join = ' ' if ! defined $join; no warnings; return join $join, @$ref },
-    last    => sub { my ($ref, $i) = @_; return $ref->[-1] if ! $i; return [@{$ref}[-$i .. -1]]},
-    list    => sub { $_[0] },
-    max     => sub { no warnings; $#{ $_[0] } },
-    merge   => sub { my $ref = shift; return [ @$ref, grep {defined} map {ref eq 'ARRAY' ? @$_ : undef} @_ ] },
-    new     => sub { no warnings; return [@_] },
-    null    => sub { '' },
-    nsort   => \&vmethod_nsort,
-    pick    => \&vmethod_pick,
-    pop     => sub { pop @{ $_[0] } },
-    push    => sub { my $ref = shift; push @$ref, @_; return '' },
-    reverse => sub { [ reverse @{ $_[0] } ] },
-    shift   => sub { shift  @{ $_[0] } },
-    size    => sub { no warnings; scalar @{ $_[0] } },
-    slice   => sub { my ($ref, $a, $b) = @_; $a ||= 0; $b = $#$ref if ! defined $b; return [@{$ref}[$a .. $b]] },
-    sort    => \&vmethod_sort,
-    splice  => \&vmethod_splice,
-    unique  => sub { my %u; return [ grep { ! $u{$_}++ } @{ $_[0] } ] },
-    unshift => sub { my $ref = shift; unshift @$ref, @_; return '' },
+    defined  => sub { return 1 if @_ == 1; defined $_[0]->[ defined($_[1]) ? $_[1] : 0 ] },
+    first    => sub { my ($ref, $i) = @_; return $ref->[0] if ! $i; return [@{$ref}[0 .. $i - 1]]},
+    fmt      => \&vmethod_fmt_list,
+    grep     => sub { no warnings; my ($ref, $pat) = @_; UNIVERSAL::isa($pat, 'CODE') ? [grep {$pat->($_)} @$ref] : [grep {/$pat/} @$ref] },
+    hash     => sub { no warnings; my $list = shift; return {@$list} if ! @_; my $i = shift || 0; return {map {$i++ => $_} @$list} },
+    import   => sub { my $ref = shift; push @$ref, grep {defined} map {ref eq 'ARRAY' ? @$_ : undef} @_; '' },
+    item     => sub { $_[0]->[ $_[1] || 0 ] },
+    join     => sub { my ($ref, $join) = @_; $join = ' ' if ! defined $join; no warnings; return join $join, @$ref },
+    last     => sub { my ($ref, $i) = @_; return $ref->[-1] if ! $i; return [@{$ref}[-$i .. -1]]},
+    list     => sub { $_[0] },
+    map      => sub { no warnings; my ($ref, $code) = @_; UNIVERSAL::isa($code, 'CODE') ? [map {$code->($_)} @$ref] : [map {$code} @$ref] },
+    max      => sub { no warnings; $#{ $_[0] } },
+    merge    => sub { my $ref = shift; return [ @$ref, grep {defined} map {ref eq 'ARRAY' ? @$_ : undef} @_ ] },
+    new      => sub { no warnings; return [@_] },
+    null     => sub { '' },
+    nsort    => \&vmethod_nsort,
+    pick     => \&vmethod_pick,
+    pop      => sub { pop @{ $_[0] } },
+    push     => sub { my $ref = shift; push @$ref, @_; return '' },
+    'return' => \&vmethod_return,
+    reverse  => sub { [ reverse @{ $_[0] } ] },
+    shift    => sub { shift  @{ $_[0] } },
+    size     => sub { no warnings; scalar @{ $_[0] } },
+    slice    => sub { my ($ref, $a, $b) = @_; $a ||= 0; $b = $#$ref if ! defined $b; return [@{$ref}[$a .. $b]] },
+    sort     => \&vmethod_sort,
+    splice   => \&vmethod_splice,
+    unique   => sub { my %u; return [ grep { ! $u{$_}++ } @{ $_[0] } ] },
+    unshift  => sub { my $ref = shift; unshift @$ref, @_; return '' },
+};
+
+our $LIST_METHODS = {
 };
 
 our $HASH_OPS = {
-    defined => sub { return 1 if @_ == 1; defined $_[0]->{ defined($_[1]) ? $_[1] : '' } },
-    delete  => sub { my $h = shift; delete @{ $h }{map {defined($_) ? $_ : ''} @_}; '' },
-    each    => sub { [%{ $_[0] }] },
-    exists  => sub { exists $_[0]->{ defined($_[1]) ? $_[1] : '' } },
-    fmt     => \&vmethod_fmt_hash,
-    hash    => sub { $_[0] },
-    import  => sub { my ($a, $b) = @_; @{$a}{keys %$b} = values %$b if ref($b) eq 'HASH'; '' },
-    item    => sub { my ($h, $k) = @_; $k = '' if ! defined $k; $Template::Alloy::QR_PRIVATE && $k =~ $Template::Alloy::QR_PRIVATE ? undef : $h->{$k} },
-    items   => sub { [ %{ $_[0] } ] },
-    keys    => sub { [keys %{ $_[0] }] },
-    list    => \&vmethod_list_hash,
-    new     => sub { no warnings; return (@_ == 1 && ref $_[-1] eq 'HASH') ? $_[-1] : {@_} },
-    null    => sub { '' },
-    nsort   => sub { my $ref = shift; [sort {   $ref->{$a} <=>    $ref->{$b}} keys %$ref] },
-    pairs   => sub { [map { {key => $_, value => $_[0]->{$_}} } sort keys %{ $_[0] } ] },
-    size    => sub { scalar keys %{ $_[0] } },
-    sort    => sub { my $ref = shift; [sort {lc $ref->{$a} cmp lc $ref->{$b}} keys %$ref] },
-    values  => sub { [values %{ $_[0] }] },
+    defined  => sub { return 1 if @_ == 1; defined $_[0]->{ defined($_[1]) ? $_[1] : '' } },
+    delete   => sub { my $h = shift; delete @{ $h }{map {defined($_) ? $_ : ''} @_}; '' },
+    each     => sub { [%{ $_[0] }] },
+    exists   => sub { exists $_[0]->{ defined($_[1]) ? $_[1] : '' } },
+    fmt      => \&vmethod_fmt_hash,
+    hash     => sub { $_[0] },
+    import   => sub { my ($a, $b) = @_; @{$a}{keys %$b} = values %$b if ref($b) eq 'HASH'; '' },
+    item     => sub { my ($h, $k) = @_; $k = '' if ! defined $k; $Template::Alloy::QR_PRIVATE && $k =~ $Template::Alloy::QR_PRIVATE ? undef : $h->{$k} },
+    items    => sub { [ %{ $_[0] } ] },
+    keys     => sub { [keys %{ $_[0] }] },
+    list     => \&vmethod_list_hash,
+    new      => sub { no warnings; return (@_ == 1 && ref $_[-1] eq 'HASH') ? $_[-1] : {@_} },
+    null     => sub { '' },
+    nsort    => sub { my $ref = shift; [sort {   $ref->{$a} <=>    $ref->{$b}} keys %$ref] },
+    pairs    => sub { [map { {key => $_, value => $_[0]->{$_}} } sort keys %{ $_[0] } ] },
+    'return' => \&vmethod_return,
+    size     => sub { scalar keys %{ $_[0] } },
+    sort     => sub { my $ref = shift; [sort {lc $ref->{$a} cmp lc $ref->{$b}} keys %$ref] },
+    values   => sub { [values %{ $_[0] }] },
 };
 
 our $VOBJS = {
@@ -272,13 +288,22 @@ sub vmethod_replace {
     return $text;
 }
 
+sub vmethod_return {
+    my $obj = shift;
+    Template::Alloy->throw('return', {return_val => $obj});
+}
+
 sub vmethod_sort {
     my ($list, $field) = @_;
-    return defined($field)
-        ? [map {$_->[0]} sort {$a->[1] cmp $b->[1]} map {[$_, lc(ref $_ eq 'HASH' ? $_->{$field}
-                                                                 : UNIVERSAL::can($_, $field) ? $_->$field()
-                                                                 : $_)]} @$list ]
-        : [map {$_->[0]} sort {$a->[1] cmp $b->[1]} map {[$_, lc $_]} @$list ]; # case insensitive
+    if (! defined $field) {
+        return [map {$_->[0]} sort {$a->[1] cmp $b->[1]} map {[$_, lc $_]} @$list ]; # case insensitive
+    } elsif (UNIVERSAL::isa($field, 'CODE')) {
+        return [sort {int($field->($a, $b))} @$list];
+    } else {
+        return [map {$_->[0]} sort {$a->[1] cmp $b->[1]} map {[$_, lc(ref $_ eq 'HASH' ? $_->{$field}
+                                                                      : UNIVERSAL::can($_, $field) ? $_->$field()
+                                                                      : $_)]} @$list ];
+    }
 }
 
 sub vmethod_splice {
@@ -312,6 +337,7 @@ sub vmethod_substr {
 
 sub vmethod_uri {
     my $str = shift;
+    return '' if ! defined $str;
     utf8::upgrade($str) if defined &utf8::upgrade;
     $str =~ s/([^A-Za-z0-9\-_.!~*\'()])/sprintf('%%%02X', ord($1))/eg;
     return $str;
@@ -319,51 +345,48 @@ sub vmethod_uri {
 
 sub vmethod_url {
     my $str = shift;
+    return '' if ! defined $str;
     utf8::upgrade($str) if defined &utf8::upgrade;
     $str =~ s/([^;\/?:@&=+\$,A-Za-z0-9\-_.!~*\'()])/sprintf('%%%02X', ord($1))/eg;
     return $str;
 }
 
-sub filter_eval {
-    my $context = shift;
-    my $args    = pop || {};
+sub item_method_eval {
+    my $t    = shift;
+    my $text = shift; return '' if ! defined $text;
+    my $args = shift || {};
+
+    local $t->{'_eval_recurse'} = $t->{'_eval_recurse'} || 0;
+    $t->throw('eval_recurse', "MAX_EVAL_RECURSE $Template::Alloy::MAX_EVAL_RECURSE reached")
+        if ++$t->{'_eval_recurse'} > ($t->{'MAX_EVAL_RECURSE'} || $Template::Alloy::MAX_EVAL_RECURSE);
+
     my %ARGS;
     @ARGS{ map {uc} keys %$args } = values %$args;
-    foreach (keys %ARGS) { delete $ARGS{$_} if ! $Template::Alloy::EVAL_CONFIG->{$_} }
+    delete @ARGS{ grep {! $Template::Alloy::EVAL_CONFIG->{$_}} keys %ARGS };
 
-    return sub {
-        ### prevent recursion
-        my $t = $context->_template;
-        local $t->{'_eval_recurse'} = $t->{'_eval_recurse'} || 0;
-        $context->throw('eval_recurse', "MAX_EVAL_RECURSE $Template::Alloy::MAX_EVAL_RECURSE reached")
-            if ++$t->{'_eval_recurse'} > ($t->{'MAX_EVAL_RECURSE'} || $Template::Alloy::MAX_EVAL_RECURSE);
-
-        my $text = shift;
-        local @{ $t }{ keys %ARGS } = values %ARGS;
-        return $context->process(\$text);
-    };
+    local @{ $t }{ keys %ARGS } = values %ARGS;
+    my $out = '';
+    $t->process_simple(\$text, $t->_vars, \$out) || $t->throw($t->error);
+    return $out;
 }
 
-sub filter_redirect {
-    my ($context, $file, $options) = @_;
-    my $path = $context->config->{'OUTPUT_PATH'} || $context->throw('redirect', 'OUTPUT_PATH is not set');
-    $context->throw('redirect', 'Invalid filename - cannot include "/../"')
+sub item_method_redirect {
+    my ($t, $text, $file, $options) = @_;
+    my $path = $t->{'OUTPUT_PATH'} || $t->throw('redirect', 'OUTPUT_PATH is not set');
+    $t->throw('redirect', 'Invalid filename - cannot include "/../"')
         if $file =~ m{(^|/)\.\./};
 
-    return sub {
-        my $text = shift;
-        if (! -d $path) {
-            require File::Path;
-            File::Path::mkpath($path) || $context->throw('redirect', "Couldn't mkpath \"$path\": $!");
-        }
-        open (my $fh, '>', "$path/$file") || $context->throw('redirect', "Couldn't open \"$file\": $!");
-        if (my $bm = (! $options) ? 0 : ref($options) ? $options->{'binmode'} : $options) {
-            if (+$bm == 1) { binmode $fh }
-            else { binmode $fh, $bm}
-        }
-        print $fh $text;
-        return '';
-    };
+    if (! -d $path) {
+        require File::Path;
+        File::Path::mkpath($path) || $t->throw('redirect', "Couldn't mkpath \"$path\": $!");
+    }
+    open (my $fh, '>', "$path/$file") || $t->throw('redirect', "Couldn't open \"$file\": $!");
+    if (my $bm = (! $options) ? 0 : ref($options) ? $options->{'binmode'} : $options) {
+        if (+$bm == 1) { binmode $fh }
+        else { binmode $fh, $bm}
+    }
+    print $fh $text;
+    return '';
 }
 
 ###----------------------------------------------------------------###
@@ -562,11 +585,11 @@ Not available in TT - available in HTML::Template::Expr.
 
 =item html
 
-    [% item.html %] Performs a very basic html encoding (swaps out &, <, > and " for the html entities)
+    [% item.html %] Performs a very basic html encoding (swaps out &, <, >, ' and " with the corresponding html entities)
 
 =item indent
 
-    [% item.indent(3) %] Indent that number of spaces.
+    [% item.indent(3) %] Indent by that number of spaces if an integer is passed (default is 4).
 
     [% item.indent("Foo: ") %] Add the string "Foo: " to the beginning of every line.
 
@@ -576,11 +599,11 @@ Not available in TT - available in HTML::Template::Expr.
 
 =item lc
 
-Same as the lower vmethod.  Returns the lower cased version of the item.
+Same as the lower vmethod.  Returns the lowercased version of the item.
 
 =item lcfirst
 
-    [% item.lcfirst %] Capitalize the leading letter.
+    [% item.lcfirst %] Lowercase the leading letter.
 
 =item length
 
@@ -588,7 +611,7 @@ Same as the lower vmethod.  Returns the lower cased version of the item.
 
 =item list
 
-    [% item.list %] Returns a list with a single value of the item.
+    [% item.list %] Returns a list (arrayref) with a single value of the item.
 
 =item log
 
@@ -600,7 +623,7 @@ Not available in TT - available in HTML::Template::Expr.
 
 =item lower
 
-    [% item.lower %] Return a lower-casified string.
+    [% item.lower %] Return the string lowercased.
 
 =item match
 
@@ -614,9 +637,15 @@ In Template::Alloy and TT3 you can use regular expressions notation as well.
 
     [% item.match( m{(\w+) (\w+)} ) %] Same as before.
 
+Note that you can't use the 'g' regex modifier - you must pass the second
+argument to turn on global match.
+
 =item null
 
-    [% item.null %] Do nothing.
+    [% item.null %] Return nonthing.
+
+If the item contains a coderef it will still be executed, but the result would
+be ignored.
 
 =item oct
 
@@ -667,13 +696,24 @@ In Template::Alloy and TT3 you may also use normal regular expression notation.
 
     [% item.replace(/(\w+)/, "($1)") %] Same as before.
 
+Note that you can't use the 'g' regex modifier - global match is on by default.
+You must pass the third argument of false to turn off global match.
+
+=item return
+
+Returns the item from the inner most block, macro, or file.  Similar to the
+RETURN directive.
+
+    [% item.return %]
+    [% RETURN item %]
+
 =item search
 
     [% item.search("(\w+)") %] Tests if the given pattern is in the string.
 
 In Template::Alloy and TT3 you may also use normal regular expression notation.
 
-    [% item.search(/(\w+)/, "($1)") %] Same as before.
+    [% item.search(/(\w+)/) %] Same as before.
 
 =item sin
 
@@ -730,15 +770,15 @@ will affect future calls to the rand vmethod.
 
 =item uc
 
-Same as the upper command.  Returns upper cased string.
+Same as the upper command.  Returns uppercased string.
 
 =item ucfirst
 
-    [% item.ucfirst %] Lower-case the leading letter.
+    [% item.ucfirst %] Uppercase the leading letter.
 
 =item upper
 
-    [% item.upper %] Return a upper cased string.
+    [% item.upper %] Return the string uppercased.
 
 =item uri
 
@@ -781,6 +821,12 @@ is a space.
 
     [% mylist.grep("^\w+\.\w+$") %] Returns a list of all items matching the pattern.
 
+In Template::Alloy and TT3 you may also use normal regular expression notation.
+
+    [% mylist.grep(/^\w+\.\w+$/) %] Same as before.
+
+    [% mylist.grep(->(a){ a.foo.bar }
+
 =item hash
 
     [% mylist.hash %] Returns a hashref with the array indexes as keys and the values as values.
@@ -797,6 +843,16 @@ is a space.
 =item list
 
     [% mylist.list %] Returns a reference to the list.
+
+=item map (Not in TT2)
+
+    [% mylist.map(->{ this.upper }) %] Returns a list with the macro played on each item.
+    [% mylist.map(->(a){ a.upper }) %] Same thing
+
+The RETURN directive or return list, item, and hash vmethods allow for returning more interesing
+items.
+
+    [% [1..3].map(->(a){ [1..a].return }) %]
 
 =item max
 
@@ -829,6 +885,14 @@ An additional numeric argument is how many items to return.
     [% ['a' .. 'z'].pick(8).join('') %]
 
 Note: This filter is not available as of TT2.15.
+
+=item return
+
+Returns the list from the inner most block, macro, or file.  Similar to the
+RETURN directive.
+
+    [% mylist.return %]
+    [% RETURN mylist %]
 
 =item reverse
 
@@ -939,7 +1003,15 @@ and represent the keys to be deleted.
 
 =item nsort
 
-    [% myhash.nsort.join(", ") %] Returns a numerically sorted list of the keys.
+    [% myhash.nsort.join(", ") %] Returns a list of keys numerically sorted by the values.
+
+=item return
+
+Returns the hash from the inner most block, macro, or file.  Similar to the
+RETURN directive.
+
+    [% myhash.return %]
+    [% RETURN myhash %]
 
 =item size
 
@@ -947,7 +1019,7 @@ and represent the keys to be deleted.
 
 =item sort
 
-    [% myhash.sort.join(", ") Returns an alphabetically sorted list.
+    [% myhash.sort.join(", ") Returns a list of keys alphabetically sorted by the values.
 
 =item values
 

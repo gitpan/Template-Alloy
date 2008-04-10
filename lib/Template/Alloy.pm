@@ -11,11 +11,11 @@ use warnings;
 use 5.006;
 use Template::Alloy::Exception;
 use Template::Alloy::Operator qw(play_operator define_operator);
-use Template::Alloy::VMethod  qw(define_vmethod $SCALAR_OPS $FILTER_OPS $LIST_OPS $HASH_OPS $VOBJS);
+use Template::Alloy::VMethod  qw(define_vmethod $SCALAR_OPS $ITEM_OPS $ITEM_METHODS $FILTER_OPS $LIST_OPS $HASH_OPS $VOBJS);
 
 use vars qw($VERSION);
 BEGIN {
-    $VERSION            = '1.011';
+    $VERSION            = '1.012';
 };
 our $QR_PRIVATE         = qr/^[_.]/;
 our $WHILE_MAX          = 1000;
@@ -24,9 +24,8 @@ our $MAX_MACRO_RECURSE  = 50;
 our $STAT_TTL           = 1;
 our $QR_INDEX           = '(?:\d*\.\d+ | \d+)';
 our @CONFIG_COMPILETIME = qw(SYNTAX CACHE_STR_REFS ANYCASE INTERPOLATE PRE_CHOMP POST_CHOMP ENCODING
-                             SEMICOLONS V1DOLLAR V2PIPE V2EQUALS AUTO_EVAL SHOW_UNDEFINED_INTERP
-                             ADD_LOCAL_PATH);
-our @CONFIG_RUNTIME     = qw(DUMP VMETHOD_FUNCTIONS);
+                             SEMICOLONS V1DOLLAR V2PIPE V2EQUALS AUTO_EVAL SHOW_UNDEFINED_INTERP);
+our @CONFIG_RUNTIME     = qw(ADD_LOCAL_PATH CALL_CONTEXT DUMP VMETHOD_FUNCTIONS);
 our $EVAL_CONFIG        = {map {$_ => 1} @CONFIG_COMPILETIME, @CONFIG_RUNTIME};
 our $EXTRA_COMPILE_EXT  = '.sto';
 our $PERL_COMPILE_EXT   = '.pl';
@@ -38,7 +37,7 @@ our $AUTOROLE = {
     Compile  => [qw(compile_template compile_tree compile_expr)],
     HTE      => [qw(parse_tree_hte param output register_function clear_param query new_file new_scalar_ref new_array_ref new_filehandle)],
     Parse    => [qw(parse_tree parse_expr apply_precedence parse_args dump_parse_tree dump_parse_expr define_directive define_syntax)],
-    Play     => [qw(play_tree list_plugins)],
+    Play     => [qw(play_tree list_plugins _macro_sub)],
     Stream   => [qw(stream_tree)],
     TT       => [qw(parse_tree_tt3 process)],
     Tmpl     => [qw(parse_tree_tmpl set_delimiters set_strip set_value set_values parse_string set_dir parse_file loop_iteration fetch_loop_iteration)],
@@ -111,6 +110,8 @@ sub new {
 
 ###----------------------------------------------------------------###
 
+sub run { shift->process_simple(@_) }
+
 sub process_simple {
     my $self = shift;
     my $in   = shift || die "Missing input";
@@ -127,7 +128,10 @@ sub process_simple {
     if (my $err = $@) {
         if ($err->type !~ /stop|return|next|last|break/) {
             $self->{'error'} = $err;
+            die $err if $self->{'RAISE_ERROR'};
             return;
+        } elsif ($err->type eq 'return' && UNIVERSAL::isa($err->info, 'HASH')) {
+            return $err->info->{'return_val'};
         }
     }
     return 1;
@@ -178,7 +182,8 @@ sub _process {
     if (my $err = $@) {
         $err = $self->exception('undef', $err) if ! UNIVERSAL::can($err, 'type');
         $err->doc($doc) if $doc && $err->can('doc') && ! $err->doc;
-        die $err if ! $self->{'_top_level'} || $err->type !~ /stop|return/;
+        die $err if ! $self->{'_top_level'};
+        die $err if $err->type ne 'stop' && ($err->type ne 'return' || $err->info);
     }
 
     return 1;
@@ -464,7 +469,7 @@ sub play_expr {
         $ref = $self->{'_vars'}->{$name};
         if (! defined $ref) {
             $ref = ($name eq 'template' || $name eq 'component') ? $self->{"_$name"} : $VOBJS->{$name};
-            $ref = $SCALAR_OPS->{$name} if ! $ref && (! defined($self->{'VMETHOD_FUNCTIONS'}) || $self->{'VMETHOD_FUNCTIONS'});
+            $ref = $ITEM_METHODS->{$name} || $ITEM_OPS->{$name} if ! $ref && (! defined($self->{'VMETHOD_FUNCTIONS'}) || $self->{'VMETHOD_FUNCTIONS'});
             $ref = $self->{'_vars'}->{lc $name} if ! defined $ref && $self->{'LOWER_CASE_VAR_FALLBACK'};
         }
     }
@@ -472,17 +477,25 @@ sub play_expr {
     my %seen_filters;
     while (defined $ref) {
 
-        ### check at each point if the rurned thing was a code
+        ### check at each point if the returned thing was a code
         if (UNIVERSAL::isa($ref, 'CODE')) {
             return $ref if $i >= $#$var && $ARGS->{'return_ref'};
-            my @results = $ref->($args ? map { $self->play_expr($_) } @$args : ());
-            if (defined $results[0]) {
-                $ref = ($#results > 0) ? \@results : $results[0];
-            } elsif (defined $results[1]) {
-                die $results[1]; # TT behavior - why not just throw ?
+            my @args = $args ? map { $self->play_expr($_) } @$args : ();
+            my $type = lc($self->{'CALL_CONTEXT'} || '');
+            if ($type eq 'item') {
+                $ref = $ref->(@args);
             } else {
-                $ref = undef;
-                last;
+                my @results = $ref->(@args);
+                if ($type eq 'list') {
+                    $ref = \@results;
+                } elsif (defined $results[0]) {
+                    $ref = ($#results > 0) ? \@results : $results[0];
+                } elsif (defined $results[1]) {
+                    die $results[1]; # TT behavior - why not just throw ?
+                } else {
+                    $ref = undef;
+                    last;
+                }
             }
         }
 
@@ -511,8 +524,11 @@ sub play_expr {
 
         ### allow for scalar and filter access (this happens for every non virtual method call)
         if (! ref $ref) {
-            if ($SCALAR_OPS->{$name}) {                        # normal scalar op
-                $ref = $SCALAR_OPS->{$name}->($ref, $args ? map { $self->play_expr($_) } @$args : ());
+            if ($ITEM_METHODS->{$name}) {                      # normal scalar op
+                $ref = $ITEM_METHODS->{$name}->($self, $ref, $args ? map { $self->play_expr($_) } @$args : ());
+
+            } elsif ($ITEM_OPS->{$name}) {                     # normal scalar op
+                $ref = $ITEM_OPS->{$name}->($ref, $args ? map { $self->play_expr($_) } @$args : ());
 
             } elsif ($LIST_OPS->{$name}) {                     # auto-promote to list and use list op
                 $ref = $LIST_OPS->{$name}->([$ref], $args ? map { $self->play_expr($_) } @$args : ());
@@ -569,11 +585,19 @@ sub play_expr {
             ### method calls on objects
             if ($was_dot_call && UNIVERSAL::can($ref, 'can')) {
                 return $ref if $i >= $#$var && $ARGS->{'return_ref'};
+                my $type = lc($self->{'CALL_CONTEXT'} || '');
                 my @args = $args ? map { $self->play_expr($_) } @$args : ();
+                if ($type eq 'item') {
+                    $ref = $ref->$name(@args);
+                    next;
+                }
                 my @results = eval { $ref->$name(@args) };
                 if ($@) {
                     my $class = ref $ref;
-                    die $@ if ref $@ || $@ !~ /Can\'t locate object method "\Q$name\E" via package "\Q$class\E"/;
+                    die $@ if ref $@ || $@ !~ /Can\'t locate object method "\Q$name\E" via package "\Q$class\E"/ || $type eq 'list';
+                } elsif ($type eq 'list') {
+                    $ref = \@results;
+                    next;
                 } elsif (defined $results[0]) {
                     $ref = ($#results > 0) ? \@results : $results[0];
                     next;
@@ -638,18 +662,22 @@ sub set_variable {
     my $args = $var->[$i++];
     if (ref $ref) {
         ### non-named types can't be set
-        return if ref($ref) ne 'ARRAY' || ! defined $ref->[0];
-
-        # named access (ie via $name.foo)
-        $ref = $self->play_expr($ref);
-        if (defined $ref && (! $QR_PRIVATE || $ref !~ $QR_PRIVATE)) { # don't allow vars that begin with _
-            if ($#$var <= $i) {
-                return $self->{'_vars'}->{$ref} = $val;
-            } else {
-                $ref = $self->{'_vars'}->{$ref} ||= {};
-            }
+        return if ref($ref) ne 'ARRAY';
+        if (! defined $ref->[0]) {
+            return if ! $ref->[1] || $ref->[1] !~ /^[\$\@]\(\)$/; # do allow @( )
+            $ref = $self->play_operator($ref);
         } else {
-            return;
+            # named access (ie via $name.foo)
+            $ref = $self->play_expr($ref);
+            if (defined $ref && (! $QR_PRIVATE || $ref !~ $QR_PRIVATE)) { # don't allow vars that begin with _
+                if ($#$var <= $i) {
+                    return $self->{'_vars'}->{$ref} = $val;
+                } else {
+                    $ref = $self->{'_vars'}->{$ref} ||= {};
+                }
+            } else {
+                return;
+            }
         }
     } elsif (defined $ref) {
         return if $QR_PRIVATE && $ref =~ $QR_PRIVATE; # don't allow vars that begin with _
@@ -664,13 +692,21 @@ sub set_variable {
 
         ### check at each point if the returned thing was a code
         if (UNIVERSAL::isa($ref, 'CODE')) {
-            my @results = $ref->($args ? map { $self->play_expr($_) } @$args : ());
-            if (defined $results[0]) {
-                $ref = ($#results > 0) ? \@results : $results[0];
-            } elsif (defined $results[1]) {
-                die $results[1]; # TT behavior - why not just throw ?
+            my $type = lc($self->{'CALL_CONTEXT'} || '');
+            my @args = $args ? map { $self->play_expr($_) } @$args : ();
+            if ($type eq 'item') {
+                $ref = $ref->(@args);
             } else {
-                return;
+                my @results = $ref->(@args);
+                if ($type eq 'list') {
+                    $ref = \@results;
+                } elsif (defined $results[0]) {
+                    $ref = ($#results > 0) ? \@results : $results[0];
+                } elsif (defined $results[1]) {
+                    die $results[1]; # TT behavior - why not just throw ?
+                } else {
+                    return;
+                }
             }
         }
 
@@ -702,14 +738,22 @@ sub set_variable {
         ### method calls on objects
         } elsif (UNIVERSAL::can($ref, 'can')) {
             my $lvalueish;
+            my $type = lc($self->{'CALL_CONTEXT'} || '');
             my @args = $args ? map { $self->play_expr($_) } @$args : ();
             if ($i >= $#$var) {
                 $lvalueish = 1;
                 push @args, $val;
             }
+            if ($type eq 'item') {
+                $ref = $ref->$name(@args);
+                return if $lvalueish;
+                next;
+            }
             my @results = eval { $ref->$name(@args) };
             if (! $@) {
-                if (defined $results[0]) {
+                if ($type eq 'list') {
+                    $ref = \@results;
+                } elsif (defined $results[0]) {
                     $ref = ($#results > 0) ? \@results : $results[0];
                 } elsif (defined $results[1]) {
                     die $results[1]; # TT behavior - why not just throw ?
@@ -769,7 +813,15 @@ sub include_filename {
         return $file if -e $file;
     }
 
-    foreach my $path (@{ $self->include_paths }) {
+    my @paths = @{ $self->include_paths };
+    if ($self->{'ADD_LOCAL_PATH'}
+        && $self->{'_component'}
+        && $self->{'_component'}->{'_filename'}
+        && $self->{'_component'}->{'_filename'} =~ m|^(.+)/[^/]+$|) {
+        ($self->{'ADD_LOCAL_PATH'} < 0) ? push(@paths, $1) : unshift(@paths, $1);
+    }
+
+    foreach my $path (@paths) {
         return "$path/$file" if -e "$path/$file";
     }
 
@@ -815,7 +867,7 @@ sub slurp {
 sub error { shift->{'error'} }
 
 sub exception {
-    my $self = shift;
+    my $self_or_class = shift;
     my $type = shift;
     my $info = shift;
     return $type if UNIVERSAL::can($type, 'type');

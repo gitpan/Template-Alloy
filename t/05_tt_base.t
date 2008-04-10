@@ -18,7 +18,7 @@ BEGIN {
 };
 
 use strict;
-use Test::More tests => (! $is_tt ? 2825 : 637) - (! $five_six ? 0 : (2 * ($is_tt ? 1 : 2)));
+use Test::More tests => (! $is_tt ? 2969 : 646) - (! $five_six ? 0 : (2 * ($is_tt ? 1 : 2)));
 use constant test_taint => 0 && eval { require Taint::Runtime };
 
 use_ok($module);
@@ -71,7 +71,7 @@ sub process_ok { # process the value and say if it was ok
         warn "# Was:\n$out\n# Should've been:\n$test\n";
         print $obj->error if $obj->can('error');
         print $obj->dump_parse_tree(\$str) if $obj->can('dump_parse_tree');
-        #exit;
+        exit;
     }
 }
 
@@ -106,8 +106,20 @@ local $INC{'Foo2.pm'} = $0;
     sub leave {}      # hacks to allow tt to do the plugins passed via PLUGINS
     sub delocalise {} # hacks to allow tt to do the plugins passed via PLUGINS
 }
+{
+    package CallContext;
+    sub new { my $class = shift; my $args = shift || {}; bless $args, $class }
+    sub last_context { shift->{'last_context'} || '' }
+    sub call_me { shift->{'last_context'} = wantarray ? 'list' : defined(wantarray) ? 'scalar' : 'void' }
+    sub array   { return my @a = (1, 2, 3) }
+    sub array2  { return my @a = (4) }
+    sub list    { return (5, 6, 7) }
+    sub scalar  { return 8 }
+    sub dataref { return shift->{'data'} ||= {} }
+}
 
-my $obj = Foo2->new;
+my $obj  = Foo2->new;
+my $cctx = CallContext->new;
 my $vars;
 my $stash = {foo => 'Stash', bingo => 'bango'};
 $stash = Template::Stash->new($stash) if eval{require Template::Stash};
@@ -444,6 +456,7 @@ process_ok("[% a.fmt('%02d','|') %]" => '02|03', {a => [2,3]}) if ! $is_tt;
 process_ok("[% a.fmt('%0*d','|', 3) %]" => '002|003', {a => [2,3]}) if ! $is_tt;
 process_ok("[% a.grep.join %]" => '2 3', {a => [2,3]});
 process_ok("[% a.grep(2).join %]" => '2', {a => [2,3]});
+process_ok("[% a.grep(->(n){n % 2}).join %]" => '3 5 7', {a => [2..7]}) if ! $is_tt;
 process_ok("[% a.hash.items.join %]" => '2 3', {a => [2,3]});
 process_ok("[% a.hash(5).items.sort.join %]" => '2 3 5 6', {a => [2,3]});
 process_ok("[% a.import(5) %]|[% a.join %]" => '|2 3', {a => [2,3]}) if ! $is_tt;
@@ -457,6 +470,7 @@ process_ok("[% a.join('|') %]" => '2|3', {a => [2,3]});
 process_ok("[% a.last %]" => '10', {a => [2..10]});
 process_ok("[% a.last(3).join %]" => '8 9 10', {a => [2..10]});
 process_ok("[% a.list.join %]" => '2 3', {a => [2, 3]});
+process_ok("[% a.map(->(n){ n.repeat(3) }).join %]" => '222 333', {a => [2,3]}) if ! $is_tt;
 process_ok("[% a.max %]" => '1', {a => [2, 3]});
 process_ok("[% a.merge(5).join %]" => '2 3', {a => [2,3]});
 process_ok("[% a.merge([5]).join %]" => '2 3 5', {a => [2,3]});
@@ -475,6 +489,7 @@ process_ok("[% a.slice(2).join %]" => '4 5', {a => [2..5]});
 process_ok("[% a.slice(0,2).join %]" => '2 3 4', {a => [2..5]});
 process_ok("[% a.sort.join %]" => '1 2 3', {a => [2, 3, 1]});
 process_ok("[% a.sort('b').0.b %]" => 'wee', {a => [{b => "wow"}, {b => "wee"}]});
+process_ok("[% c.sort(->(a,b){ a.k cmp b.k }).map(->{this.k}).join %]" => 'a wee wow', {c => [{k => "wow"}, {k => "wee"}, {k => "a"}]});
 process_ok("[% a.splice.join %]|[% a.join %]" => '2 3 4 5|', {a => [2..5]});
 process_ok("[% a.splice(2).join %]|[% a.join %]" => '4 5|2 3', {a => [2..5]});
 process_ok("[% a.splice(0,2).join %]|[% a.join %]" => '2 3|4 5', {a => [2..5]});
@@ -607,6 +622,67 @@ process_ok('[% a = Hash.new(one = "ONE") %][% a.one %]' => 'ONE') if ! $is_tt;
 process_ok('[% a = Hash.new(one => "ONE") %][% a.one %]' => 'ONE') if ! $is_tt;
 
 process_ok('[% {a => 1, b => 2} | Hash.keys | List.sort | List.join(", ") %]' => 'a, b') if ! $is_tt;
+
+###----------------------------------------------------------------###
+print "### CONTEXT ######################################### $engine_option\n";
+
+$cctx->{'bang'} = 'bing';
+process_ok("[% CALL cctx.call_me  %][% cctx.last_context %]" => "list", {cctx => $cctx});
+process_ok("[% cctx.array  %]" => qr{^ARRAY}, {cctx => $cctx});
+process_ok("[% cctx.array2 %]" => "4",        {cctx => $cctx});
+process_ok("[% cctx.list   %]" => qr{^ARRAY}, {cctx => $cctx});
+process_ok("[% cctx.scalar %]" => "8",        {cctx => $cctx});
+process_ok("[% cctx.bang   %]" => "bing",     {cctx => $cctx});
+
+if (! $is_tt) {
+    delete $cctx->{'last_context'};
+    process_ok('[% CALL cctx.call_me %][% cctx.last_context %]'    => "list",   {cctx => $cctx});
+    process_ok('[% CALL @(cctx.call_me) %][% cctx.last_context %]' => "list",   {cctx => $cctx});
+    process_ok('[% CALL $(cctx.call_me) %][% cctx.last_context %]' => "scalar", {cctx => $cctx});
+    process_ok('[% CALL call_cctx %][% cctx.last_context %]'    => "list",   {cctx => $cctx, call_cctx => sub { $cctx->call_me }});
+    process_ok('[% CALL @(call_cctx) %][% cctx.last_context %]' => "list",   {cctx => $cctx, call_cctx => sub { $cctx->call_me }});
+    process_ok('[% CALL $(call_cctx) %][% cctx.last_context %]' => "scalar", {cctx => $cctx, call_cctx => sub { $cctx->call_me }});
+    process_ok('[% CALL cctx.call_me %][% cctx.last_context %]' => "list",   {cctx => $cctx, tt_config => [CALL_CONTEXT => 'smart']});
+    process_ok('[% CALL cctx.call_me %][% cctx.last_context.0 %]' => "list",   {cctx => $cctx, tt_config => [CALL_CONTEXT => 'list']});
+    process_ok('[% CALL cctx.call_me %][% cctx.last_context %]' => "scalar", {cctx => $cctx, tt_config => [CALL_CONTEXT => 'item']});
+    process_ok('[% cctx.array %]'    => qr{^ARRAY}, {cctx => $cctx});
+    process_ok('[% @(cctx.array) %]' => qr{^ARRAY}, {cctx => $cctx});
+    process_ok('[% $(cctx.array) %]' => '3',        {cctx => $cctx});
+    process_ok('[% cctx.array2 %]'    => '4',        {cctx => $cctx});
+    process_ok('[% @(cctx.array2) %]' => qr{^ARRAY}, {cctx => $cctx});
+    process_ok('[% $(cctx.array2) %]' => '1',        {cctx => $cctx});
+    process_ok('[% cctx.list %]'    => qr{^ARRAY}, {cctx => $cctx});
+    process_ok('[% @(cctx.list) %]' => qr{^ARRAY}, {cctx => $cctx});
+    process_ok('[% $(cctx.list) %]' => '7',        {cctx => $cctx});
+    process_ok('[% cctx.scalar %]'    => '8',        {cctx => $cctx});
+    process_ok('[% @(cctx.scalar) %]' => qr{^ARRAY}, {cctx => $cctx});
+    process_ok('[% $(cctx.scalar) %]' => '8',        {cctx => $cctx});
+    process_ok('[% cctx.bang   %] ~'    => 'bing ~',     {cctx => $cctx});
+    process_ok('[% @(cctx.bang)   %] ~' => '',     {cctx => $cctx});
+    process_ok('[% $(cctx.bang)   %] ~' => '',     {cctx => $cctx});
+}
+
+delete $cctx->{'bang'};
+process_ok("[% cctx.data = 1 %] ~" => "",   {cctx => $cctx})   if $is_tt; # TT lets you read but not write - weird
+process_ok("[% cctx.bang = 1 %] ~" => " ~", {cctx => $cctx}) if ! $is_tt;
+delete $cctx->{'data'};
+process_ok("[% cctx.dataref.foo = 7; cctx.dataref.foo %]" => "7", {cctx => $cctx});
+
+if (! $is_tt) {
+    process_ok('[% SET cctx.call_me    = 2 %][% cctx.last_context %]' => "list", {cctx => $cctx});
+    delete $cctx->{'last_context'};
+    process_ok('[% SET @(cctx.call_me) = 3 %][% cctx.last_context %]' => "list", {cctx => $cctx});
+    delete $cctx->{'last_context'};
+    process_ok('[% SET $(cctx.call_me) = 4 %][% cctx.last_context %]' => "scalar", {cctx => $cctx});
+    delete $cctx->{'data'};
+    process_ok('[% cctx.dataref.0.foo = 7; cctx.dataref.0.foo %]' => "7", {cctx => $cctx});
+    delete $cctx->{'data'};
+    process_ok('[% @(cctx.dataref).0.foo = 7; cctx.dataref.foo %]' => "7", {cctx => $cctx});
+    delete $cctx->{'data'};
+    process_ok('[% $(cctx.dataref).0.foo = 7; cctx.dataref.0.foo %]'=> "7", {cctx => $cctx});
+    delete $cctx->{'data'};
+    process_ok('[% CONFIG CALL_CONTEXT => "list"; cctx.dataref.0.foo = 7; CONFIG CALL_CONTEXT => "item"; cctx.dataref.foo %]'=> "7", {cctx => $cctx});
+}
 
 ###----------------------------------------------------------------###
 print "### chomping ######################################## $engine_option\n";
@@ -802,6 +878,8 @@ process_ok("[% BLOCK foo %]hi [% one %] there[% END %][% INCLUDE foo one = 'two'
 process_ok("[% BLOCK foo %]FOO[% IF ! a ; a = 1; PROCESS bar; END %][% END %][% BLOCK bar %]BAR[% PROCESS foo %][% END %][% PROCESS foo %]" => "") if ! $is_tt && ! $use_stream;
 process_ok("[% BLOCK foo %]FOO[% IF ! a ; a = 1; PROCESS bar; END %][% END %][% BLOCK bar %]BAR[% PROCESS foo %][% END %][% PROCESS foo %]d" => "FOOBAR") if $use_stream;
 process_ok("[% BLOCK foo %]FOO[% IF ! a ; a = 1; PROCESS bar; END %][% END %][% BLOCK bar %]BAR[% PROCESS foo %][% END %][% PROCESS foo %]" => "FOOBARFOO", {tt_config => [RECURSION => 1]});
+
+process_ok('[% a = 23; PROCESS $foo %]' => 'bar 23 baz', {foo => \ "bar [% a %] baz"});
 
 ###----------------------------------------------------------------###
 print "### IF / UNLESS / ELSIF / ELSE ###################### $engine_option\n";
@@ -1088,6 +1166,14 @@ process_ok("[%n=1%][% MACRO foo BLOCK %]Hi[% n = 2%][% END %][% foo %][%n%]" => 
 process_ok("[% MACRO foo(n) FOREACH i=[1..n] %][% i %][% END %][% foo(3) %]" => '123');
 
 process_ok('[% MACRO f BLOCK %]>[% TRY; f ; CATCH ;  "caught" ; END %][% END %][% f %]' => '>>>caught', {tt_config => [MAX_MACRO_RECURSE => 3]}) if ! $is_tt;
+
+if (! $is_tt) {
+    process_ok("[% foo = ->{ 'Hi' } %][% foo %]" => 'Hi');
+    process_ok("[% foo = ->{ 'Hi'; this } %][% foo(2) %]" => 'Hi2');
+    process_ok("[% foo = ->(n){ 'Hi'; n } %][% foo(2) %]" => 'Hi2');
+    process_ok("[%n=1%][% foo = ->(n) { 'Hi' ; n } %][% foo(2) %][%n%]" => 'Hi21');
+    process_ok("[% foo = ->(n) { FOREACH i=[1..n]; i ; END } %][% foo(3) %]" => '123');
+}
 
 ###----------------------------------------------------------------###
 print "### DEBUG ########################################### $engine_option\n";

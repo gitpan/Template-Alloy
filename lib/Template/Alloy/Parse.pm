@@ -80,7 +80,7 @@ our $DIRECTIVES = {
     PERL    => [sub {},          \&play_PERL,     1,       0,       0,        1],
     PROCESS => [\&parse_PROCESS, \&play_PROCESS],
     RAWPERL => [sub {},          \&play_RAWPERL,  1,       0,       0,        1],
-    RETURN  => [sub {},          \&play_control],
+    RETURN  => [\&parse_RETURN,  \&play_control],
     SET     => [\&parse_SET,     \&play_SET],
     STOP    => [sub {},          \&play_control],
     SWITCH  => [\&parse_SWITCH,  \&play_SWITCH,   1],
@@ -158,6 +158,20 @@ sub parse_expr {
     }
 
     $$str_ref =~ m{ \G \s* $QR_COMMENTS }gcxo;
+
+    ### allow for macro definer
+    if ($$str_ref =~ m{ \G -> \s* }gcxo) { # longest token would be nice - until then this comes before prefix
+        local $self->{'_operator_precedence'} = 0; # reset presedence
+        my $args;
+        if ($$str_ref =~ m{ \G \( \s* }gcx) {
+            $args = $self->parse_args($str_ref, {positional_only => 1});
+            $$str_ref =~ m{ \G \) \s* }gcx || $self->throw('parse.missing', "Missing close ')'", undef, pos($$str_ref));
+        }
+        $$str_ref =~ m{ \G \{ $QR_COMMENTS }gcx || $self->throw('parse.missing', "Missing open '{'", undef, pos($$str_ref));
+        local $self->{'END_TAG'} = qr{ \} }x;
+        my $tree = $self->parse_tree_tt3($str_ref, 'one_tag_only');
+        return [[undef, '->', $args || [['this',0]], $tree]];
+    }
 
     ### test for leading prefix operators
     my $has_prefix;
@@ -322,9 +336,10 @@ sub parse_expr {
             || $self->throw('parse.missing.curly_bracket', "Missing close \}", undef, pos($$str_ref));
         push @var, $hashref;
 
-    ### looks like a paren grouper
-    } elsif (! $is_aq && $$str_ref =~ m{ \G \( }gcx) {
+    ### looks like a paren grouper or a context specifier
+    } elsif (! $is_aq && $$str_ref =~ m{ \G ([\$\@]?) \( }gcx) {
         local $self->{'_operator_precedence'} = 0; # reset precedence
+        my $ctx = $1;
         my $var = $self->parse_expr($str_ref, {allow_parened_ops => 1});
 
         $$str_ref =~ m{ \G \s* $QR_COMMENTS \) }gcxo
@@ -332,8 +347,8 @@ sub parse_expr {
 
         $self->throw('parse', 'Paren group cannot be followed by an open paren', undef, pos($$str_ref))
             if $$str_ref =~ m{ \G \( }gcx;
-
         $already_parsed_args = 1;
+
         if (! ref $var) {
             push @var, \$var, 0;
             $is_literal = 1;
@@ -341,6 +356,10 @@ sub parse_expr {
             push @var, $var, 0;
         } else {
             push @var, @$var;
+        }
+        if ($ctx) {
+            my $copy = [@var];
+            @var = ([undef, "$ctx()", $copy], 0);
         }
 
     ### nothing to find - return failure
@@ -469,7 +488,8 @@ sub parse_expr {
                     undef $found;
                 }
                 $var = [[undef, $has_prefix->[-1], $var ], 0];
-                if (! @$has_prefix) { undef $has_prefix } else { pop @$has_prefix }
+                pop @$has_prefix;
+                $has_prefix = undef if ! @$has_prefix;
             }
 
             ### add the operator to the tree
@@ -853,6 +873,12 @@ sub parse_PROCESS {
         allow_bare_filenames => 1,
         require_arg          => 1,
     });
+}
+
+sub parse_RETURN {
+    my ($self, $str_ref) = @_;
+    my $ref = $self->parse_expr($str_ref); # optional return value
+    return $ref;
 }
 
 sub parse_SET {

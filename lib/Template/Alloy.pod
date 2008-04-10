@@ -187,6 +187,7 @@ The following is a list of roles used by Template::Alloy.
     Template::Alloy::Operator - Operator role
     Template::Alloy::Parse    - Parse-to-AST role
     Template::Alloy::Play     - Play-AST role
+    Template::Alloy::Stream   - Stream output role
     Template::Alloy::Tmpl     - Text::Tmpl role
     Template::Alloy::TT       - Template::Toolkit role
     Template::Alloy::Velocity - Velocity role
@@ -269,37 +270,6 @@ broken).  However Template::Alloy doesn't support 100% of the interface
 of any of the template systems.  If you are using "features-on-the-edge"
 then you may need to re-write portions of your code that interact with
 the template system.
-
-=head1 TODO
-
-=over 4
-
-=item
-
-Add more POD and examples for all of the various syntaxes.
-
-=item
-
-Allow dispatch to different syntaxes based on file extension.
-
-=item
-
-Cleanup operator API to allow for easier full customization of
-operators.
-
-=item
-
-Give better examples of overriding directives, syntax, and operators.
-
-=item
-
-Include ASP style.
-
-=item
-
-Include HTML::Parser variants such as TAL and Seamstress.
-
-=back
 
 =head1 PUBLIC METHODS
 
@@ -1018,7 +988,6 @@ options.
 
 The following compile time configuration options may be set:
 
-    ADD_LOCAL_PATH
     ANYCASE
     AUTO_EVAL
     CACHE_STR_REFS
@@ -1035,6 +1004,8 @@ The following compile time configuration options may be set:
 
 The following runtime configuration options may be set:
 
+    ADD_LOCAL_PATH
+    CALL_CONTEXT
     DUMP
     VMETHOD_FUNCTIONS
 
@@ -1371,6 +1342,15 @@ Would print:
 
     (1)(2)(3)(4)
 
+Starting with version 1.012 of Template::Alloy there is also
+a macro operator.
+
+    [% foo = ->(i,j){ "You passed me $i and $j" } %]
+
+    [% bar = ->(max){ FOREACH i = [1 .. max]; i ; END } %]
+
+See the Template::Alloy::Operator documentation for more examples.
+
 =item C<META>
 
 Used to define variables that will be available via either the
@@ -1454,6 +1434,18 @@ to the $output variable rather than just calling PRINT.
 
 Used to exit the innermost block or template and continue processing
 in the surrounding block or template.
+
+There are two changes from TT2 behavior.  First, In Alloy, a RETURN during
+a MACRO call will only exit the MACRO.  Second, the RETURN directive
+takes an optional variable name or expression, if passed, the MACRO will
+return this value instead of the normal text from the MACRO.  The process_simple
+method will also return this value.
+
+You can also use the item, list, and hash return vmethods.
+
+    [% RETURN %]       # just exits
+    [% RETURN "foo" %] # return value is foo
+    [% "foo".return %] # same thing
 
 =item C<SET>
 
@@ -1975,13 +1967,16 @@ Boolean.  Default false.  Are absolute paths allowed for included files.
 
 =item ADD_LOCAL_PATH
 
-If true, allows calls to PROCESS and INCLUDE to temporarily add
-the directory of the current template being processed to the INCLUDE_PATHS
-arrayref.  This allows templates to refer to files in the local directory
-without specifying the local directory.  Default is 0.  If set to a negative
-value, the current directory will be added to the end of the current
-INCLUDE_PATHS.  This modification to the INCLUDE_PATHS will only be in
-effect during a PROCESS or INCLUDE directive.
+If true, allows calls include_filename to temporarily add the
+directory of the current template being processed to the INCLUDE_PATHS
+arrayref.  This allows templates to refer to files in the local
+template directory without specifying the local directory as part of
+the filename.  Default is 0.  If set to a negative value, the current
+directory will be added to the end of the current INCLUDE_PATHS.
+
+This property may also be set in the template using the CONFIG directive.
+
+    [% CONFIG ADD_LOCAL_PATH => 1 %]
 
 =item ANYCASE
 
@@ -2027,6 +2022,65 @@ will then be used for caching the document - both in memory and on
 the file system (if configured).  This will give a significant speed
 boost.  Note that this affects strings passed to the EVALUATE directive
 or eval filters as well.  It may be set using the CONFIG directive.
+
+=item CALL_CONTEXT (Not in TT)
+
+Can be one of 'item', 'list', or 'smart'.  The default type is
+'smart'.  The CALL_CONTEXT configuration specifies in what Perl
+context coderefs and methods used in the processed templates will be
+called.  TT historically has avoided the distinction of item (scalar)
+vs list context.  To avoid worrying about this, TT introduced 'smart'
+context.  The C<@()> and C<$()> context specifiers make it easier to use
+CALL_CONTEXT in some situations.
+
+The following table shows the relationship between the various contexts:
+
+       return values      smart context   list context    item context
+       -------------      -------------   ------------    ------------
+    A   'foo'              'foo'           ['foo']         'foo'
+    B   undef              undef           [undef]         undef
+    C   (no return value)  undef           []              undef
+    D   (7)                7               [7]             7
+    E   (7,8,9)            [7,8,9]         [7,8,9]         9
+    F   @a = (7)           7               [7]             1
+    G   @a = (7,8,9)       [7,8,9]         [7,8,9]         3
+    H   ({b=>"c"})         {b=>"c"}        [{b=>"c"}]      {b=>"c"}
+    I   ([1])              [1]             [[1]]           [1]
+    J   ([1],[2])          [[1],[2]]       [[1],[2]]       [2]
+    K   [7,8,9]            [7,8,9]         [[7,8,9]]       [7,8,9]
+    L   (undef, "foo")     die "foo"       [undef, "foo"]  "foo"
+    M   wantarray?1:0      1               1               0
+
+Cases F, H, I and M are common sticking points of the the smart context
+in TT2.  Note that list context always returns an arrayref from a method
+or function call.  Smart context can give confusing results sometimes,
+especially the I and J cases.  Case L for smart match is very surprising.
+
+The list and item context provide another feature for method calls.  In
+smart context, TT will look for a hash key in the object by the same name
+as the method, if a method by that name doesn't exist.  In item and list
+context Alloy will die if a method by that name cannot be found.
+
+The CALL_CONTEXT configuration item can be passed to new or it may
+also be set during runtime using the CONFIG directive.  The following
+method call would be in list context:
+
+    [% CONFIG CALL_CONTEXT => 'list';
+       results = my_obj.get_results;
+       CONFIG CALL_CONTEXT => 'smart'
+    %]
+
+Note that we needed to restore CALL_CONTEXT to the default 'smart' value.
+Template::Alloy has added the C<@()> (list) and the C<$()> (item) context
+specifiers.  The previous example could be written as:
+
+    [% results = @( my_obj.get_results ) %]
+
+To call that same method in item (scalar) context you would do the following:
+
+    [% results = $( my_obj.get_results ) %]
+
+The C<@()> and C<$()> operators are based on the Perl 6 counterpart.
 
 =item COMPILE_DIR
 
