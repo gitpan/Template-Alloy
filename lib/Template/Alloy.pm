@@ -15,7 +15,7 @@ use Template::Alloy::VMethod  qw(define_vmethod $SCALAR_OPS $ITEM_OPS $ITEM_METH
 
 use vars qw($VERSION);
 BEGIN {
-    $VERSION            = '1.012';
+    $VERSION            = '1.013';
 };
 our $QR_PRIVATE         = qr/^[_.]/;
 our $WHILE_MAX          = 1000;
@@ -37,7 +37,7 @@ our $AUTOROLE = {
     Compile  => [qw(compile_template compile_tree compile_expr)],
     HTE      => [qw(parse_tree_hte param output register_function clear_param query new_file new_scalar_ref new_array_ref new_filehandle)],
     Parse    => [qw(parse_tree parse_expr apply_precedence parse_args dump_parse_tree dump_parse_expr define_directive define_syntax)],
-    Play     => [qw(play_tree list_plugins _macro_sub)],
+    Play     => [qw(play_tree _macro_sub)],
     Stream   => [qw(stream_tree)],
     TT       => [qw(parse_tree_tt3 process)],
     Tmpl     => [qw(parse_tree_tmpl set_delimiters set_strip set_value set_values parse_string set_dir parse_file loop_iteration fetch_loop_iteration)],
@@ -421,10 +421,10 @@ sub load_perl {
         }
         open(my $fh, ">", $doc->{'_compile_filename'}) || $self->throw('compile', "Could not open file \"$doc->{'_compile_filename'}\" for writing: $!");
         ### todo - think about locking
-        if ($self->{'ENCODING'} && eval { require Encode }) {
-            print $fh Encode::encode($self->{'ENCODING'}, $$perl);
+        if ($self->{'ENCODING'} && eval { require Encode } && defined &Encode::encode) {
+            print {$fh} Encode::encode($self->{'ENCODING'}, $$perl);
         } else {
-            print $fh $$perl;
+            print {$fh} $$perl;
         }
         close $fh;
         utime $doc->{'modtime'}, $doc->{'modtime'}, $doc->{'_compile_filename'};
@@ -854,7 +854,7 @@ sub slurp {
 
     if ($self->{'ENCODING'}) { # thanks to Carl Franks for this addition
         eval { require Encode };
-        if ($@) {
+        if ($@ || ! defined &Encode::decode) {
             warn "Encode module not found, 'ENCODING' config only available on perl >= 5.7.3\n$@";
         } else {
             $txt = Encode::decode($self->{'ENCODING'}, $txt);

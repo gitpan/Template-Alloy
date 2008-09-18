@@ -18,7 +18,7 @@ BEGIN {
 };
 
 use strict;
-use Test::More tests => (! $is_tt ? 2969 : 646) - (! $five_six ? 0 : (2 * ($is_tt ? 1 : 2)));
+use Test::More tests => (! $is_tt ? 2993 : 654) - (! $five_six ? 0 : (2 * ($is_tt ? 1 : 2)));
 use constant test_taint => 0 && eval { require Taint::Runtime };
 
 use_ok($module);
@@ -78,10 +78,10 @@ sub process_ok { # process the value and say if it was ok
 ###----------------------------------------------------------------###
 
 ### set up some dummy packages for various tests
-local $INC{'MyTestPlugin/Foo.pm'} = $0;
-local $INC{'Foo2.pm'} = $0;
+local $INC{'MyTestPlugin/FooTest.pm'} = $0;
+local $INC{'FooTest2.pm'} = $0;
 {
-    package MyTestPlugin::Foo;
+    package MyTestPlugin::FooTest;
     sub load { $_[0] }
     sub new {
         my $class   = shift;
@@ -95,8 +95,8 @@ local $INC{'Foo2.pm'} = $0;
     sub echo { my $self = shift; $_[0] }
 }
 {
-    package Foo2;
-    use base qw(MyTestPlugin::Foo);
+    package FooTest2;
+    use base qw(MyTestPlugin::FooTest);
     use vars qw($AUTOLOAD);
     sub new {
         my $class   = shift;
@@ -118,7 +118,7 @@ local $INC{'Foo2.pm'} = $0;
     sub dataref { return shift->{'data'} ||= {} }
 }
 
-my $obj  = Foo2->new;
+my $obj  = FooTest2->new;
 my $cctx = CallContext->new;
 my $vars;
 my $stash = {foo => 'Stash', bingo => 'bango'};
@@ -489,7 +489,7 @@ process_ok("[% a.slice(2).join %]" => '4 5', {a => [2..5]});
 process_ok("[% a.slice(0,2).join %]" => '2 3 4', {a => [2..5]});
 process_ok("[% a.sort.join %]" => '1 2 3', {a => [2, 3, 1]});
 process_ok("[% a.sort('b').0.b %]" => 'wee', {a => [{b => "wow"}, {b => "wee"}]});
-process_ok("[% c.sort(->(a,b){ a.k cmp b.k }).map(->{this.k}).join %]" => 'a wee wow', {c => [{k => "wow"}, {k => "wee"}, {k => "a"}]});
+process_ok("[% c.sort(->(a,b){ a.k cmp b.k }).map(->{this.k}).join %]" => 'a wee wow', {c => [{k => "wow"}, {k => "wee"}, {k => "a"}]}) if ! $is_tt;
 process_ok("[% a.splice.join %]|[% a.join %]" => '2 3 4 5|', {a => [2..5]});
 process_ok("[% a.splice(2).join %]|[% a.join %]" => '4 5|2 3', {a => [2..5]});
 process_ok("[% a.splice(0,2).join %]|[% a.join %]" => '2 3|4 5', {a => [2..5]});
@@ -663,8 +663,8 @@ if (! $is_tt) {
 }
 
 delete $cctx->{'bang'};
-process_ok("[% cctx.data = 1 %] ~" => "",   {cctx => $cctx})   if $is_tt; # TT lets you read but not write - weird
-process_ok("[% cctx.bang = 1 %] ~" => " ~", {cctx => $cctx}) if ! $is_tt;
+#process_ok("[% cctx.data = 1 %] ~" => "",   {cctx => $cctx})   if $is_tt; # TT lets you read but not write - weird
+process_ok("[% cctx.bang = 1 %] ~" => " ~", {cctx => $cctx});
 delete $cctx->{'data'};
 process_ok("[% cctx.dataref.foo = 7; cctx.dataref.foo %]" => "7", {cctx => $cctx});
 
@@ -962,6 +962,25 @@ process_ok('[% FOREACH f = [1..3]; f; END %]' => '123');
 process_ok('[% FOREACH f = [1..3]; "$f"; END %]' => '123');
 process_ok('[% FOREACH f = [1..3]; f + 1; END %]' => '234');
 
+{
+    package TEST_HASH_OBJ;
+    sub n { shift->{'n'} }
+}
+{
+    package TEST_ARRAY_OBJ;
+    sub n { shift->[0] }
+}
+my @objs = map { bless {n => $_}, 'TEST_HASH_OBJ' } 1..3;
+process_ok('[% FOREACH i IN foo; i.n; END %]' => '123', {foo => sub { \@objs }});
+process_ok('[% FOREACH i IN foo; i.n; END %]' => '1', {foo => sub { [$objs[0]] }});
+process_ok('[% FOREACH i IN foo; i.n; END %]' => '123', {foo => sub { @objs }});
+process_ok('[% FOREACH i IN foo; i.n; END %]' => '1', {foo => sub { $objs[0] }});
+@objs = map { bless [$_], 'TEST_ARRAY_OBJ' } 1..3;
+process_ok('[% FOREACH i IN foo; i.n; END %]' => '123', {foo => sub { \@objs }});
+process_ok('[% FOREACH i IN foo; i.n; END %]' => '1', {foo => sub { [$objs[0]] }});
+process_ok('[% FOREACH i IN foo; i.n; END %]' => '123', {foo => sub { @objs }});
+process_ok('[% FOREACH i IN foo; i.n; END %]' => '1', {foo => sub { $objs[0] }});
+
 ###----------------------------------------------------------------###
 print "### LOOP ############################################ $engine_option\n";
 
@@ -1140,19 +1159,19 @@ print "### USE ############################################# $engine_option\n";
 
 my @config_p = (PLUGIN_BASE => 'MyTestPlugin', LOAD_PERL => 1);
 process_ok("[% USE son_of_gun_that_does_not_exist %]one" => '', {tt_config => \@config_p});
-process_ok("[% USE Foo %]one" => 'one', {tt_config => \@config_p});
-process_ok("[% USE Foo2 %]one" => 'one', {tt_config => \@config_p});
-process_ok("[% USE Foo(bar = 'baz') %]one[% Foo.bar %]" => 'onebarbaz', {tt_config => \@config_p});
-process_ok("[% USE Foo2(bar = 'baz') %]one[% Foo2.bar %]" => 'onebarbaz', {tt_config => \@config_p});
-process_ok("[% USE Foo(bar = 'baz') %]one[% Foo.bar %]" => 'onebarbaz', {tt_config => \@config_p});
-process_ok("[% USE d = Foo(bar = 'baz') %]one[% d.bar %]" => 'onebarbaz', {tt_config => \@config_p});
-process_ok("[% USE d.d = Foo(bar = 'baz') %]one[% d.d.bar %]" => '', {tt_config => \@config_p});
+process_ok("[% USE FooTest %]one" => 'one', {tt_config => \@config_p});
+process_ok("[% USE FooTest2 %]one" => 'one', {tt_config => \@config_p});
+process_ok("[% USE FooTest(bar = 'baz') %]one[% FooTest.bar %]" => 'onebarbaz', {tt_config => \@config_p});
+process_ok("[% USE FooTest2(bar = 'baz') %]one[% FooTest2.bar %]" => 'onebarbaz', {tt_config => \@config_p});
+process_ok("[% USE FooTest(bar = 'baz') %]one[% FooTest.bar %]" => 'onebarbaz', {tt_config => \@config_p});
+process_ok("[% USE d = FooTest(bar = 'baz') %]one[% d.bar %]" => 'onebarbaz', {tt_config => \@config_p});
+process_ok("[% USE d.d = FooTest(bar = 'baz') %]one[% d.d.bar %]" => '', {tt_config => \@config_p});
 
-process_ok("[% USE a(bar = 'baz') %]one[% a.seven %]" => '',     {tt_config => [@config_p, PLUGINS => {a=>'Foo'}, ]});
-process_ok("[% USE a(bar = 'baz') %]one[% a.seven %]" => 'one7', {tt_config => [@config_p, PLUGINS => {a=>'Foo2'},]});
+process_ok("[% USE a(bar = 'baz') %]one[% a.seven %]" => '',     {tt_config => [@config_p, PLUGINS => {a=>'FooTest'}, ]});
+process_ok("[% USE a(bar = 'baz') %]one[% a.seven %]" => 'one7', {tt_config => [@config_p, PLUGINS => {a=>'FooTest2'},]});
 
 @config_p = (PLUGIN_BASE => ['NonExistant', 'MyTestPlugin'], LOAD_PERL => 1);
-process_ok("[% USE Foo %]one" => 'one', {tt_config => \@config_p});
+process_ok("[% USE FooTest %]three" => 'three', {tt_config => \@config_p});
 
 ###----------------------------------------------------------------###
 print "### MACRO ########################################### $engine_option\n";

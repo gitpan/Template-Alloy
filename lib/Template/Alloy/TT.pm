@@ -51,7 +51,7 @@ sub parse_tree_tt3 {
     my $capture;          # flag to start capture
     my $func;
     my $node;
-    local pos($$str_ref) = 0 if ! $one_tag_only;
+    pos($$str_ref) = 0 if ! $one_tag_only;
 
     while (1) {
         ### continue looking for information in a semi-colon delimited tag
@@ -338,14 +338,14 @@ sub process {
         if (ref($in) eq 'SCALAR') { # reference to a string
             $content = $in;
         } elsif (UNIVERSAL::isa($in, 'CODE')) {
-            $content = $in->();
-            $content = \$content;
+            $in = $in->();
+            $content = \$in;
         } elsif (ref($in) eq 'HASH') { # pre-prepared document
             $content = $in;
         } else { # should be a file handle
             local $/ = undef;
-            $content = <$in>;
-            $content = \$content;
+            $in = <$in>;
+            $content = \$in;
         }
     } else {
         ### should be a filename
@@ -482,44 +482,42 @@ sub process {
         } elsif (UNIVERSAL::isa($out, 'ARRAY')) {
             push @$out, $output;
         } else { # should be a file handle
-            print $out $output;
+            print {$out} $output;
         }
     } elsif ($out) { # should be a filename
         my $file;
         if ($out =~ m|^/|) {
             if (! $self->{'ABSOLUTE'}) {
-                $self->{'error'} = $self->throw('file', "ABSOLUTE paths disabled");
+                $self->throw($self->{'error'} = $self->exception('file', "ABSOLUTE paths disabled"));
             } else {
                 $file = $out;
             }
         } elsif ($out =~ m|^\.\.?/|) {
             if (! $self->{'RELATIVE'}) {
-                $self->{'error'} = $self->throw('file', "RELATIVE paths disabled");
+                $self->throw($self->{'error'} = $self->exception('file', "RELATIVE paths disabled"));
             } else {
                 $file = $out;
             }
         } else {
-            if (! $self->{'OUTPUT_PATH'}) {
-                $self->{'error'} = $self->throw('file', "OUTPUT_PATH not set");
-            } else {
-                $file = $self->{'OUTPUT_PATH'} . '/' . $out;
+            my $path = $self->{'OUTPUT_PATH'};
+            $path = '.' if ! defined $path;
+            if (! -d $path) {
+                require File::Path;
+                File::Path::mkpath($path);
+            }
+            $file = "$path/$out";
+        }
+        open(my $fh, '>', $file)
+            || $self->throw($self->{'error'} = $self->exception('file', "$out couldn't be opened for writing: $!"));
+        if (my $bm = $args->{'binmode'}) {
+            if (+$bm == 1) { binmode $fh }
+            else           { binmode $fh, $bm }
+        } elsif ($self->{'ENCODING'}) {
+            if (eval { require Encode } && defined &Encode::encode) {
+                $output = Encode::encode($self->{'ENCODING'}, $output);
             }
         }
-        if ($file) {
-            if (open my $fh, '>', $file) {
-                if (my $bm = $args->{'binmode'}) {
-                    if (+$bm == 1) { binmode $fh }
-                    else           { binmode $fh, $bm }
-                } elsif ($self->{'ENCODING'}) {
-                    if (eval { require Encode }) {
-                        $output = Encode::encode($self->{'ENCODING'}, $output);
-                    }
-                }
-                print $fh $output;
-            } else {
-                $self->{'error'} = $self->throw('file', "$out couldn't be opened for writing: $!");
-            }
-        }
+        print {$fh} $output;
     } else {
         print $output;
     }
