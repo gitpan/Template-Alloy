@@ -10,7 +10,7 @@ use 5.006;
 use vars qw($module $is_tt $compile_perl $use_stream $five_six);
 BEGIN {
     $module = 'Template::Alloy';
-    if (grep {/tt/i} @ARGV) {
+    if ($ENV{'USE_TT'} || grep {/tt/i} @ARGV) {
         $module = 'Template';
     }
     $is_tt = $module eq 'Template';
@@ -18,7 +18,7 @@ BEGIN {
 };
 
 use strict;
-use Test::More tests => (! $is_tt ? 2993 : 654) - (! $five_six ? 0 : (2 * ($is_tt ? 1 : 2)));
+use Test::More tests => (! $is_tt ? 3038 : 661) - (! $five_six ? 0 : (2 * ($is_tt ? 1 : 2)));
 use constant test_taint => 0 && eval { require Taint::Runtime };
 
 use_ok($module);
@@ -384,7 +384,8 @@ process_ok("[% n|format('%0*d', 3) %]" => '007', {n => 7}) if ! $is_tt;
 process_ok("[% n|format('(%s)') %]" => "(a)\n(b)", {n => "a\nb"}); # TT2 filter
 process_ok("[% n.hash.items.1 %]" => "b", {n => {a => "b"}});
 process_ok("[% n.hex %]" => "255", {n => "FF"}) if ! $is_tt;
-process_ok("[% n|html %]" => "&amp;", {n => '&'}); # TT2 filter
+process_ok("[% n|html %]" => "&amp;&lt;&gt;&quot;'", {n => '&<>"\''}); # TT2 filter
+process_ok("[% n|xml %]"  => "&amp;&lt;&gt;&quot;&apos;", {n => '&<>"\''}); # TT2 filter
 process_ok("[% n|indent %]" => "    a\n    b", {n => "a\nb"}); # TT2 filter
 process_ok("[% n|indent(2) %]" => "  a\n  b", {n => "a\nb"}); # TT2 filter
 process_ok("[% n|indent('wow ') %]" => "wow a\nwow b", {n => "a\nb"}); # TT2 filter
@@ -835,18 +836,20 @@ process_ok("[% foo ERR 6 %]" => 6, {foo => undef}) if ! $is_tt;
 ###----------------------------------------------------------------###
 print "### regex ########################################### $engine_option\n";
 
-process_ok("[% /foo/ %]"     => '(?-xism:foo)') if ! $is_tt;
-process_ok("[% /foo %]"      => '') if ! $is_tt;
-process_ok("[% /foo/x %]"    => '(?-xism:(?x:foo))') if ! $is_tt;
-process_ok("[% /foo/xi %]"   => '(?-xism:(?xi:foo))') if ! $is_tt;
-process_ok("[% /foo/xis %]"  => '(?-xism:(?xis:foo))') if ! $is_tt;
-process_ok("[% /foo/xism %]" => '(?-xism:(?xism:foo))') if ! $is_tt;
-process_ok("[% /foo/e %]"    => '') if ! $is_tt;
-process_ok("[% /foo/g %]"    => '') if ! $is_tt;
-process_ok("[% /foo %]"      => '') if ! $is_tt;
-process_ok("[% /foo**/ %]"   => '') if ! $is_tt;
-process_ok("[% /fo\\/o/ %]"     => '(?-xism:fo/o)') if ! $is_tt;
-process_ok("[% 'foobar'.match(/(f\\w\\w)/).0 %]" => 'foo') if ! $is_tt;
+if (! $is_tt) {
+process_ok("[% 'foo'.match(/foo/)        ? 1 : 0 %]" => '1');
+process_ok("[% 'foo'.match(/foo)         ? 1 : 0 %]" => '');
+process_ok("[% 'foo'.match(/fo o/x)      ? 1 : 0 %]" => '1');
+process_ok("[% 'foo'.match(/Fo o/xi)     ? 1 : 0 %]" => '1');
+process_ok("[% 'F\no'.match(/F . o/xis)  ? 1 : 0 %]" => '1');
+process_ok("[% '\nfoo'.match(/^foo/xism) ? 1 : 0 %]" => '1');
+process_ok("[% 'foo'.match(/foo/e)       ? 1 : 0 %]" => '');
+process_ok("[% 'foo'.match(/foo/g)       ? 1 : 0 %]" => '');
+process_ok("[% 'foo'.match(/foo)         ? 1 : 0 %]" => '');
+process_ok("[% 'foo'.match(/foo**/)      ? 1 : 0 %]" => '');
+process_ok("[% 'fo/o'.match(/fo\\/o/)    ? 1 : 0 %]" => '1');
+process_ok("[% 'foobar'.match(/(f\\w\\w)/).0 %]" => 'foo');
+}
 
 ###----------------------------------------------------------------###
 print "### BLOCK / PROCESS / INCLUDE######################## $engine_option\n";
@@ -935,6 +938,9 @@ process_ok("[% FOREACH f = [1..3] %][% IF loop.first %][% NEXT %][% END %][% f %
 process_ok("[% FOREACH f = [1..3] %][% IF loop.first %][% LAST %][% END %][% f %][% END %]" => '');
 process_ok("[% FOREACH f = [1..3] %][% f %][% IF loop.first %][% NEXT %][% END %][% END %]" => '123');
 process_ok("[% FOREACH f = [1..3] %][% f %][% IF loop.first %][% LAST %][% END %][% END %]" => '1');
+process_ok("[% loop.odd    FOREACH [1..5] %]" => '10101');
+process_ok("[% loop.even   FOREACH [1..5] %]" => '01010');
+process_ok("[% loop.parity FOREACH [1..5] %]" => 'oddevenoddevenodd');
 
 process_ok('[% a = ["Red", "Blue"] ; FOR [0..3] ; a.${ loop.index % a.size } ; END %]' => 'RedBlueRedBlue') if ! $is_tt;
 
@@ -1206,7 +1212,8 @@ process_ok("[% one;\n one %]" => "(1)ONE(2)ONE", {one=>'ONE', tt_config => ['DEB
 process_ok("[% DEBUG format '(\$line)' %][% one %]" => qr/\(1\)/, {one=>'ONE', tt_config => ['DEBUG' => 8]});
 
 process_ok("[% TRY %][% abc %][% CATCH %][% error %][% END %]" => "undef error - abc is undefined\n", {tt_config => ['DEBUG' => 2]});
-process_ok("[% TRY %][% abc.def %][% CATCH %][% error %][% END %]" => "undef error - def is undefined\n", {abc => {}, tt_config => ['DEBUG' => 2]});
+process_ok("[% TRY %][% abc.def %][% CATCH %][% error %][% END %]" => "undef error - def is undefined\n", {abc => {}, tt_config => ['DEBUG' => 2]}) if $is_tt;
+process_ok("[% TRY %][% abc.def %][% CATCH %][% error %][% END %]" => "undef error - abc.def is undefined\n", {abc => {}, tt_config => ['DEBUG' => 2]}) if !$is_tt;
 
 ###----------------------------------------------------------------###
 print "### constants ####################################### $engine_option\n";
@@ -1446,11 +1453,26 @@ process_ok('[% f = ">[% TRY; f.eval ; CATCH; \'foo\' ; END %]"; f.eval;f.eval %]
 process_ok("[% '#set(\$foo = 12)'|eval(syntax => 'velocity') %]|[% foo %]" => '|12') if ! $is_tt;
 
 ###----------------------------------------------------------------###
+print "### STRICT ########################################## $engine_option\n";
+process_ok("[% TRY; foo; CATCH; error; END %]" => qr'var.undef error - undefined variable: foo.*', {tt_config => [STRICT => 1]});
+process_ok("[% TRY; foo.bar(1); CATCH; error; END %]" => qr'var.undef error - undefined variable: foo\.bar\(1\).*', {tt_config => [STRICT => 1]});
+process_ok("[% TRY; 1 IF foo.bar.baz; CATCH; error; END %]" => qr'var.undef error - undefined variable: foo\.bar\.baz.*', {tt_config => [STRICT => 1]});
+if (! $is_tt) {
+process_ok("[% foo.bar() %]ok" => 'ok', {tt_config => [STRICT => 1, STRICT_THROW => sub { my ($t, $y, $m, $args) = @_; return if $args->{'name'} eq 'foo.bar()'; $t->throw($y,$m)}]});
+process_ok("[% foo.baz() %]ok" => '',   {tt_config => [STRICT => 1, STRICT_THROW => sub { my ($t, $y, $m, $args) = @_; return if $args->{'name'} eq 'foo.bar()'; $t->throw($y,$m)}]});
+}
+
+###----------------------------------------------------------------###
 print "### EVALUATE ######################################## $engine_option\n";
 
 process_ok('[% f = ">[% TRY; f.eval ; CATCH; \'caught\' ; END %]"; EVALUATE f %]' => '>>>>>caught', {tt_config => [MAX_EVAL_RECURSE => 5]}) if ! $is_tt;
 process_ok('[% f = ">[% TRY; f.eval ; CATCH; \'foo\' ; END %]"; EVALUATE f; EVALUATE f %]' => '>>foo>>foo', {tt_config => [MAX_EVAL_RECURSE => 2]}) if ! $is_tt;
 process_ok("[% EVALUATE '#set(\$foo = 12)' syntax => 'velocity' %]|[% foo %]" => '|12') if ! $is_tt;
+if (!$is_tt) {
+process_ok("[% TRY; '[% bar %]'.eval(STRICT => 1); CATCH; error; END %]" => 'var.undef error - undefined variable: bar in input text');
+process_ok("[% TRY; CONFIG STRICT => 1; '[% bar %]'.eval(STRICT => 0); CATCH; error; END %]" => 'eval_strict error - Cannot disable STRICT once it is enabled');
+process_ok("[% TRY; '[% bar %]'.eval(STRICT => 1); CATCH; error.type; END; bing %] - ok" => 'var.undef - ok'); # restricted to sub components
+}
 
 ###----------------------------------------------------------------###
 print "### DUMP ############################################ $engine_option\n";
@@ -1542,6 +1564,9 @@ process_ok("[% \"[% get 1+2+3 %]\" | eval(ANYCASE => 1) %] = [% GET 6 %]" => "6 
 process_ok("[% CONFIG DUMP    %]|[% CONFIG DUMP    => 0 %][% DUMP           %]bar" => 'CONFIG DUMP = undef|bar');
 process_ok("[% CONFIG DUMP => {Useqq=>1, header=>0, html=>0} %][% DUMP 'foo' %]" => "'foo' = \"foo\";\n");
 process_ok("[% CONFIG VMETHOD_FUNCTIONS => 0 %][% sprintf('%d %d', 7, 8) %] d" => ' d');
+process_ok("[% TRY; foo; CONFIG STRICT => 1; bar; CATCH; error; END %]" => 'var.undef error - undefined variable: bar in input text');
+process_ok("[% TRY; foo; CONFIG STRICT => 1; CONFIG STRICT => 0; bar; CATCH; error; END %]" => 'config.strict error - Cannot disable STRICT once it is enabled');
+process_ok("[% BLOCK foo; CONFIG STRICT => 1; baz; END; TRY; bam; PROCESS foo; bar; CATCH; error.type; END; bing %] - ok" => 'var.undef - ok'); # restricted to sub components
 }
 
 ###----------------------------------------------------------------###

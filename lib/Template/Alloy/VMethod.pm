@@ -35,7 +35,7 @@ our $SCALAR_OPS = our $ITEM_OPS = {
     'format' => \&vmethod_format,
     hash     => sub { {value => $_[0]} },
     hex      => sub { no warnings; hex $_[0] },
-    html     => sub { local $_ = $_[0]; s/&/&amp;/g; s/</&lt;/g; s/>/&gt;/g; s/\"/&quot;/g; s/\'/&apos;/g; $_ },
+    html     => sub { local $_ = $_[0]; s/&/&amp;/g; s/</&lt;/g; s/>/&gt;/g; s/\"/&quot;/g; $_ },
     indent   => \&vmethod_indent,
     int      => sub { no warnings; int $_[0] },
     item     => sub { $_[0] },
@@ -71,6 +71,7 @@ our $SCALAR_OPS = our $ITEM_OPS = {
     upper    => sub { uc $_[0] },
     uri      => \&vmethod_uri,
     url      => \&vmethod_url,
+    xml      => sub { local $_ = $_[0]; s/&/&amp;/g; s/</&lt;/g; s/>/&gt;/g; s/\"/&quot;/g; s/\'/&apos;/g; $_ },
 };
 
 our $ITEM_METHODS = {
@@ -363,6 +364,7 @@ sub item_method_eval {
     my %ARGS;
     @ARGS{ map {uc} keys %$args } = values %$args;
     delete @ARGS{ grep {! $Template::Alloy::EVAL_CONFIG->{$_}} keys %ARGS };
+    $t->throw("eval_strict", "Cannot disable STRICT once it is enabled") if exists $ARGS{'STRICT'} && ! $ARGS{'STRICT'};
 
     local @{ $t }{ keys %ARGS } = values %ARGS;
     my $out = '';
@@ -422,7 +424,7 @@ than oneliners.  These methods are not exposed via the role.
 Methods by these names implement filters that are more complex than
 one liners.  These methods are not exposed via the role.
 
-=cut
+=back
 
 =head1 VIRTUAL METHOD LIST
 
@@ -585,7 +587,8 @@ Not available in TT - available in HTML::Template::Expr.
 
 =item html
 
-    [% item.html %] Performs a very basic html encoding (swaps out &, <, >, ' and " with the corresponding html entities)
+    [% item.html %] Performs a very basic html encoding (swaps out &, <, > and " with the corresponding html entities)
+    Previously it also encoded the ' but this behavior did not match TT2's behavior.  Use .xml to obtain that behavior.
 
 =item indent
 
@@ -789,6 +792,10 @@ Same as the upper command.  Returns uppercased string.
     [% item.url %] Perform a URI encoding - but some characters such
                    as : and / are left intact.
 
+=item xml
+
+    [% item.xml %] Performs a very basic xml encoding (swaps out &, <, >, ' and " with the corresponding xml entities)
+
 =back
 
 =head2 LIST VIRTUAL METHODS
@@ -930,7 +937,7 @@ RETURN directive.
 
     [% mylist.unshift(23) %] Adds an item to the beginning of the arrayref.
 
-=back 4
+=back
 
 =head2 HASH VIRTUAL METHODS
 

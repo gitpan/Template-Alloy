@@ -1008,6 +1008,7 @@ The following runtime configuration options may be set:
     CALL_CONTEXT
     DUMP
     VMETHOD_FUNCTIONS
+    STRICT (can only be enabled, cannot be disabled)
 
 If non-named parameters as passed, they will show the current configuration:
 
@@ -1174,6 +1175,9 @@ The loop variable provides the following information during a FOREACH:
     last   - true if on the last item
     next   - return the next item in the list
     prev   - return the previous item in the list
+    odd    - return 1 if the current count is odd, 0 otherwise
+    even   - return 1 if the current count is even, 0 otherwise
+    parity - return "odd" if the current count is odd, "even" otherwise
 
 The following:
 
@@ -2049,7 +2053,7 @@ The following table shows the relationship between the various contexts:
     J   ([1],[2])          [[1],[2]]       [[1],[2]]       [2]
     K   [7,8,9]            [7,8,9]         [[7,8,9]]       [7,8,9]
     L   (undef, "foo")     die "foo"       [undef, "foo"]  "foo"
-    M   wantarray?1:0      1               1               0
+    M   wantarray?1:0      1               [1]             0
 
 Cases F, H, I and M are common sticking points of the smart context
 in TT2.  Note that list context always returns an arrayref from a method
@@ -2147,7 +2151,7 @@ debugging modes.  Alternately the lowercase names may be used
 (multiple values joined by a ",").
 
     The only supported TT values are:
-    DEBUG_UNDEF (2)    - debug when an undefined value is used.
+    DEBUG_UNDEF (2)    - debug when an undefined value is used (now easier to use STRICT)
     DEBUG_DIRS  (8)    - debug when a directive is used.
     DEBUG_ALL   (2047) - turn on all debugging.
 
@@ -2587,6 +2591,50 @@ parameter passed to process or process_simple will be ignored.
 If you would like the output to go to another handle, you will need to
 select that handle, process the template, and re-select STDOUT.
 
+=item STRICT
+
+Defaults to false.  If set to true, any undefined variable that is
+encountered will cause the processing of the template to abort.  This
+can be caught with a TRY block.  This can be useful for making sure
+that the template only attempts to use variables that were correctly
+initialized similiar in spirit to Perl's "use strict."
+
+When this occurs the strict_throw method is called.
+
+See the STRICT_THROW configuration for additional options.
+
+Similar functionality could be implemeted using UNDEFINED_ANY.
+
+The STRICT configuration item can be passed to new or it may also be
+set during runtime using the CONFIG directive.  Once set though it
+cannot be disabled for the duration of the current template and sub
+components.  For example you could call [% CONFIG STRICT => 1 %] in
+header.tt and strict mode would be enabled for the header.tt and any
+sub templates processed by header.tt.
+
+=item STRICT_THROW (not in TT)
+
+Default undef.  Can be set to a subroutine which will be called when
+STRICT is set and an undefined variable is processed.  It will be
+passed the error type, error message, and a hashref of template
+information containing the current component being processed, the
+current outer template being processed, the identity reference for the
+variable, and the stringified name of the identity.  This override can
+be used for filtering allowable elements.
+
+    my $ta = Template::Alloy->new({
+        STRICT => 1,
+        STRICT_THROW => sub {
+            my ($ta, $err_type, $msg, $args) = @_;
+
+            return if $args->{'component'} eq 'header.tt'
+                      && $args->{'template'} eq 'main.html'
+                      && $args->{'name'} eq 'foo.bar(1)'; # stringified identity name
+
+            $ta->throw($err_type, $msg); # all other undefined variables die
+        },
+    });
+
 =item SYNTAX (not in TT)
 
 Defaults to "cet".  Indicates the syntax that will be used for parsing
@@ -2982,6 +3030,13 @@ See L<Template::Alloy::Parse> for more details.
 Used to set a variable.  Expects a variable identity array and the
 value to set.  It will autovifiy as necessary.
 
+=item C<strict_throw>
+
+Called during processing of template when STRICT configuration is
+set and an uninitialized variable is met.  Arguments are the variable
+identity reference.  Will call STRICT_THROW configuration item if set,
+otherwise will call throw with a useful message.
+
 =item C<throw>
 
 Creates an exception object from the arguments and dies.
@@ -3012,6 +3067,10 @@ The following is a brief list of other methods used by Alloy.  Generally, these
 shouldn't be overwritten by subclasses.
 
 =over 4
+
+=item C<ast_string>
+
+Returns perl code representation of a variable.
 
 =item C<context>
 
@@ -3053,6 +3112,10 @@ Reads contents of passed filename - throws file exception on error.
 =item C<split_paths>
 
 Used to split INCLUDE_PATH or other directives if an arrayref is not passed.
+
+=item C<tt_var_string>
+
+Returns a template toolkit representation of a variable.
 
 =item C<_vars>
 

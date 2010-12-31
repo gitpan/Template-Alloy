@@ -2,7 +2,7 @@ package Template::Alloy;
 
 ###----------------------------------------------------------------###
 #  See the perldoc in Template/Alloy.pod
-#  Copyright 2007 - Paul Seamons                                     #
+#  Copyright 2007 - 2011 - Paul Seamons                              #
 #  Distributed under the Perl Artistic License without warranty      #
 ###----------------------------------------------------------------###
 
@@ -15,7 +15,7 @@ use Template::Alloy::VMethod  qw(define_vmethod $SCALAR_OPS $ITEM_OPS $ITEM_METH
 
 use vars qw($VERSION);
 BEGIN {
-    $VERSION            = '1.013';
+    $VERSION            = '1.015';
 };
 our $QR_PRIVATE         = qr/^[_.]/;
 our $WHILE_MAX          = 1000;
@@ -25,7 +25,7 @@ our $STAT_TTL           = 1;
 our $QR_INDEX           = '(?:\d*\.\d+ | \d+)';
 our @CONFIG_COMPILETIME = qw(SYNTAX CACHE_STR_REFS ANYCASE INTERPOLATE PRE_CHOMP POST_CHOMP ENCODING
                              SEMICOLONS V1DOLLAR V2PIPE V2EQUALS AUTO_EVAL SHOW_UNDEFINED_INTERP);
-our @CONFIG_RUNTIME     = qw(ADD_LOCAL_PATH CALL_CONTEXT DUMP VMETHOD_FUNCTIONS);
+our @CONFIG_RUNTIME     = qw(ADD_LOCAL_PATH CALL_CONTEXT DUMP VMETHOD_FUNCTIONS STRICT);
 our $EVAL_CONFIG        = {map {$_ => 1} @CONFIG_COMPILETIME, @CONFIG_RUNTIME};
 our $EXTRA_COMPILE_EXT  = '.sto';
 our $PERL_COMPILE_EXT   = '.pl';
@@ -264,19 +264,24 @@ sub load_template {
             if ($self->{'EXPOSE_BLOCKS'} && ! $self->{'_looking_in_block_file'}) {
                 local $self->{'_looking_in_block_file'} = 1;
                 my $block_name = '';
-              OUTER: while ($file =~ s|/([^/.]+)$||) {
-                  $block_name = length($block_name) ? "$1/$block_name" : $1;
-                  my $ref = eval { $self->load_template($file) } || next;
-                  my $_tree = $ref->{'_tree'};
-                  foreach my $node (@$_tree) {
-                      last if ! ref $node;
-                      next if $node->[0] eq 'META';
-                      last if $node->[0] ne 'BLOCK';
-                      next if $block_name ne $node->[3];
-                      $doc->{'_tree'} = $node->[4];
-                      @{$doc}{qw(modtime _content _perl)} = @{$ref}{qw(modtime _content _perl)};
-                      return $doc;
-                  }
+                OUTER: while ($file =~ s|/([^/.]+)$||) {
+                    $block_name = length($block_name) ? "$1/$block_name" : $1;
+                    my $ref = eval { $self->load_template($file) } || next;
+                    my $_tree = $ref->{'_tree'};
+                    foreach my $node (@$_tree) {
+                        last if ! ref $node;
+                        next if $node->[0] eq 'META';
+                        last if $node->[0] ne 'BLOCK';
+                        next if $block_name ne $node->[3];
+                        $doc->{'_tree'} = $node->[4];
+                        @{$doc}{qw(modtime _content)} = @{$ref}{qw(modtime _content)};
+                        $doc->{'_perl'} = {
+                            meta   => {},
+                            blocks => {},
+                            code   => $ref->{'_perl'}->{'blocks'}->{$block_name}->{'_perl'}->{'code'},
+                        } if $ref->{'_perl'} && $ref->{'_perl'}->{'blocks'} && $ref->{'_perl'}->{'blocks'}->{$block_name};
+                        return $doc;
+                    }
               }
             } elsif ($self->{'DEFAULT'}) {
                 $err = '' if ($doc->{'_filename'} = eval { $self->include_filename($self->{'DEFAULT'}) });
@@ -341,6 +346,7 @@ sub load_tree {
         if ($self->{'COMPILE_DIR'} || $self->{'COMPILE_EXT'}) {
             my $file = $doc->{'_filename'};
             if ($self->{'COMPILE_DIR'}) {
+                $file =~ y|:|/| if $^O eq 'MSWin32';
                 $file = $self->{'COMPILE_DIR'} .'/'. $file;
             } elsif ($doc->{'_is_str_ref'}) {
                 $file = ($self->include_paths->[0] || '.') .'/'. $file;
@@ -394,6 +400,7 @@ sub load_perl {
         if ($self->{'COMPILE_DIR'} || $self->{'COMPILE_EXT'}) {
             my $file = $doc->{'_filename'};
             if ($self->{'COMPILE_DIR'}) {
+                $file =~ y|:|/| if $^O eq 'MSWin32';
                 $file = $self->{'COMPILE_DIR'} .'/'. $file;
             } elsif ($doc->{'_is_str_ref'}) {
                 $file = ($self->include_paths->[0] || '.') .'/'. $file;
@@ -638,11 +645,8 @@ sub play_expr {
     } # end of while
 
     if (! defined $ref) {
-        if ($self->{'_debug_undef'}) {
-            my $chunk = $var->[$i - 2];
-            $chunk = $self->play_expr($chunk) if ref($chunk) eq 'ARRAY';
-            die "$chunk is undefined\n";
-        }
+        $self->strict_throw($var) if $self->{'STRICT'}; # will die
+        die $self->tt_var_string($var)." is undefined\n" if $self->{'_debug_undef'};
         $ref = $self->undefined_any($var);
     }
 
@@ -914,6 +918,16 @@ sub undefined_any {
     return;
 }
 
+sub strict_throw {
+    my ($self, $ident) = @_;
+    my $v = $self->tt_var_string($ident);
+    my $temp = $self->{'_template'}->{'name'};
+    my $comp = $self->{'_component'}->{'name'};
+    my $msg  = "undefined variable: $v in $comp".($comp ne $temp ? " while processing $temp" : '');
+    return $self->{'STRICT_THROW'}->($self, 'var.undef', $msg, {name => $v, component => $comp, template => $temp, ident => $ident}) if $self->{'STRICT_THROW'};
+    $self->throw('var.undef', $msg);
+}
+
 sub list_filters { shift->{'_filters'} ||= eval { require Template::Filters; $Template::Filters::FILTERS } || {} }
 
 sub debug_node {
@@ -982,6 +996,22 @@ sub ast_string {
 
     $var =~ s/([\'\\])/\\$1/g;
     return "'$var'";
+}
+
+sub tt_var_string {
+    my ($self, $ident) = @_;
+    if (! ref $ident) {
+        return $ident if $ident eq '0' || $ident =~ /^[1-9]\d{0,12}$/;
+        $ident =~ s/\'/\\\'/g;
+        return "'$ident'";
+    }
+    my $v = '';
+    for (my $i = 0; $i < @$ident; ) {
+        $v .= $ident->[$i++];
+        $v .= '('.join(',',map{$self->tt_var_string($_)} @{$ident->[$i-1]}).')' if $ident->[$i++];
+        $v .= $ident->[$i++] if $i < @$ident;
+    }
+    return $v;
 }
 
 1;
