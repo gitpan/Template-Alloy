@@ -953,6 +953,7 @@ DIRECTIVES
 
             ANYCASE
             AUTO_EVAL
+            AUTO_FILTER
             CACHE_STR_REFS
             ENCODING
             INTERPOLATE
@@ -1924,7 +1925,30 @@ CONFIGURATION
     AUTO_EVAL
         Boolean. Default 0 (default 1 in Velocity syntax). If set to true,
         double quoted strings will automatically be passed to the eval
-        filter.
+        filter. This configurtation option may also be passed to the CONFIG
+        directive.
+
+    AUTO_FILTER
+        Can be the name of any filter. Default undef. Any variable returned
+        by a GET directive (including implicit GET) will be passed to the
+        named filter. This configurtation option may also be passed to the
+        CONFIG directive.
+
+            # with AUTO_FILTER => 'html'
+
+            [% f = "&"; GET f %] prints &amp;
+            [% f = "&"; f %]     prints &amp; (implicit GET)
+
+        If a variable already has another filter applied the AUTO_FILTER is
+        not applied. The "none" scalar virtual method has been added to
+        allow for using variables without reapplying filters.
+
+            # with AUTO_FILTER => 'html'
+
+            [% f = "&";  f | none %] prints &
+            [% f = "&"; g = f; g %]  prints &amp;
+            [% f = "&"; g = f; g | none %]  prints & (because g = f is a SET directive)
+            [% f = "&"; g = GET f; g | none %]  prints &amp; (because the actual GET directive was called)
 
     BLOCKS
         Only available via when using the process interface.
@@ -2804,6 +2828,12 @@ CONFIGURATION (HTML::Template STYLE)
         directives will be encoded with this type unless they specify their
         own type via an ESCAPE attribute.
 
+        You may alternately use the AUTO_FILTER directive which can be any
+        of the item vmethod filters (you must use lower case when specifying
+        the AUTO_FILTER directive). The AUTO_FILTER directive will also be
+        applied to TMPL_VAR EXPR and TMPL_GET items while DEFAULT_ESCAPE
+        only applies to TMPL_VAR NAME items.
+
     NO_TT
         Default false in 'hte' syntax. Default true in 'ht' syntax. If true,
         no extended TT directives will be allowed.
@@ -2983,6 +3013,6 @@ POD ERRORS
     Around line 834:
         You forgot a '=back' before '=head1'
 
-    Around line 1946:
+    Around line 1947:
         You forgot a '=back' before '=head1'
 

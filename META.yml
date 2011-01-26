@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               Template-Alloy
-version:            1.015
+version:            1.016
 abstract:           TT2/3, HT, HTE, Tmpl, and Velocity Engine
 author:
     - Paul Seamons
