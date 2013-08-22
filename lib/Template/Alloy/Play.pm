@@ -102,10 +102,12 @@ sub _is_empty_named_args {
 sub play_BLOCK {
     my ($self, $block_name, $node, $out_ref) = @_;
 
-    ### store a named reference - but do nothing until something processes it
+    # store a named reference - but do nothing until something processes it
+    my $comp = $self->{'_component'};
     $self->{'BLOCKS'}->{$block_name} = {
         _tree => $node->[4],
-        name  => $self->{'_component'}->{'name'} .'/'. $block_name,
+        name  => $comp->{'name'} .'/'. $block_name,
+        ($comp->{'_filename'} ? (_filename => $comp->{'_filename'}) : ()),
     };
 
     return;
@@ -196,7 +198,7 @@ sub play_DUMP {
     $_ = $self->play_expr($_) foreach @dump;
 
     ### look for the text describing what to dump
-    my $info = $self->node_info($node);
+    my $info = eval { $self->node_info($node) } || {text => 'unknown', file => 'unknown', line => 'unknown'};
     my $out;
     if (@dump) {
         $out = $handler->(@dump && @dump == 1 ? $dump[0] : \@dump);
@@ -385,6 +387,12 @@ sub play_INSERT {
     return;
 }
 
+sub play_JS {
+    my $self = shift;
+    $self->throw('js', 'COMPILE_JS not set while running a JS block') if ! $self->{'COMPILE_JS'};
+    $self->throw('js', 'Cannot run JS directly');
+}
+
 sub play_LOOP {
     my ($self, $ref, $node, $out_ref) = @_;
 
@@ -480,6 +488,7 @@ sub _macro_sub {
 sub play_META {
     my ($self, $hash) = @_;
     return if ! $hash;
+    $hash = {@$hash} if ref($hash) eq 'ARRAY';
     my @keys = keys %$hash;
 
     my $ref;
@@ -796,7 +805,7 @@ sub play_TRY {
 sub play_UNLESS { return $DIRECTIVES->{'IF'}->(@_) }
 
 sub play_USE {
-    my ($self, $ref, $node, $out_ref) = @_;
+    my ($self, $ref, $node, $out_ref, $foreign) = @_; # foreign allows for usage from JS
     my ($var, $module, $args) = @$ref;
 
     ### get the stash storage location - default to the module
@@ -811,18 +820,18 @@ sub play_USE {
     my $obj;
     if (my $fact = $self->{'PLUGIN_FACTORY'}->{$module} || $self->{'PLUGIN_FACTORY'}->{lc $module}) {
         if (UNIVERSAL::isa($fact, 'CODE')) {
-            $obj = $fact->($self->context, map { $self->play_expr($_) } @args);
+            $obj = $fact->($self->context, $foreign ? @$foreign : map { $self->play_expr($_) } @args);
         }
 
     } elsif (my $pkg = $self->{'PLUGINS'}->{$module} || $self->{'PLUGINS'}->{lc $module}) {
         (my $req = "$pkg.pm") =~ s|::|/|g;
         if (UNIVERSAL::isa($pkg, 'UNIVERSAL') || eval { require $req }) {
             my $shape = $pkg->load;
-            $obj = $shape->new($self->context, map { $self->play_expr($_) } @args);
+            $obj = $shape->new($self->context, $foreign ? @$foreign : map { $self->play_expr($_) } @args);
         }
 
     } elsif (lc($module) eq 'iterator') { # use our iterator if none found (TT's works fine too)
-        $obj = $self->iterator($args[0]);
+        $obj = $self->iterator($foreign ? @$foreign : map { $self->play_expr($_) } @args);
 
     } else {
         my $found;
@@ -836,7 +845,7 @@ sub play_USE {
                     $found = 1;
                     if (eval { require $req }) {
                         my $shape = $pkg->load;
-                        $obj = $shape->new($self->context, map { $self->play_expr($_) } @args);
+                        $obj = $shape->new($self->context, $foreign ? @$foreign : map { $self->play_expr($_) } @args);
                     }
                     last;
                 }
@@ -845,9 +854,9 @@ sub play_USE {
 
             my $pkg = "${base}::${module}";
             (my $req = "$pkg.pm") =~ s|::|/|g;
-            if (UNIVERSAL::isa($pkg, 'UNIVERSAL') || eval { require $req }) {
+            if ($pkg->can('load') || eval { require $req }) {
                 my $shape = $pkg->load;
-                $obj = $shape->new($self->context, map { $self->play_expr($_) } @args);
+                $obj = $shape->new($self->context, $foreign ? @$foreign : map { $self->play_expr($_) } @args);
                 $found = 1;
                 last;
             }
@@ -855,8 +864,8 @@ sub play_USE {
 
         if (! $found && $self->{'LOAD_PERL'}) {
             (my $req = "$module.pm") =~ s|::|/|g;
-            if (UNIVERSAL::isa($module, 'UNIVERSAL') || eval { require $req }) {
-                $obj = $module->new(map { $self->play_expr($_) } @args);
+            if ($module->can('new') || eval { require $req }) {
+                $obj = $module->new($foreign ? @$foreign : map { $self->play_expr($_) } @args);
             }
         }
     }
@@ -866,6 +875,7 @@ sub play_USE {
         $self->throw('plugin', $err);
     }
 
+    return $obj if $foreign;
     $self->set_variable(\@var, $obj);
 
     return;
@@ -1026,7 +1036,7 @@ Methods by these names are used by execute_tree to execute the parsed tree.
 
 =head1 AUTHOR
 
-Paul Seamons <paul at seamons dot com>
+Paul Seamons <paul@seamons.com>
 
 =head1 LICENSE
 

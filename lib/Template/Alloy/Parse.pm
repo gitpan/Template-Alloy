@@ -36,6 +36,8 @@ our $TAGS = {
 
 our $SYNTAX = {
     alloy    => sub { shift->parse_tree_tt3(@_) },
+    js       => sub { shift->parse_tree_js(@_) },
+    jsr      => sub { shift->parse_tree_jsr(@_) },
     ht       => sub { my $self = shift; local $self->{'V2EQUALS'} = 0; local $self->{'EXPR'} = 0; $self->parse_tree_hte(@_) },
     hte      => sub { my $self = shift; local $self->{'V2EQUALS'} = 0; $self->parse_tree_hte(@_) },
     tt3      => sub { shift->parse_tree_tt3(@_) },
@@ -72,6 +74,7 @@ our $DIRECTIVES = {
     IF      => [\&parse_IF,      \&play_IF,       1,       1],
     INCLUDE => [\&parse_INCLUDE, \&play_INCLUDE],
     INSERT  => [\&parse_INSERT,  \&play_INSERT],
+    JS      => [sub {},          \&play_JS,       1,       0,       0,        1],
     LAST    => [sub {},          \&play_control],
     LOOP    => [\&parse_LOOP,    \&play_LOOP,     1,       1],
     MACRO   => [\&parse_MACRO,   \&play_MACRO],
@@ -865,7 +868,7 @@ sub parse_META {
     my ($self, $str_ref) = @_;
     my $args = $self->parse_args($str_ref, {named_at_front => 1});
     my $hash;
-    return $hash if ($hash = $self->play_expr($args->[0])) && UNIVERSAL::isa($hash, 'HASH');
+    return [%$hash] if ($hash = $self->play_expr($args->[0])) && UNIVERSAL::isa($hash, 'HASH');
     return undef;
 }
 
@@ -1219,7 +1222,7 @@ Also the following can be included in a template to view the output in a templat
 
 =head1 AUTHOR
 
-Paul Seamons <paul at seamons dot com>
+Paul Seamons <paul@seamons.com>
 
 =head1 LICENSE
 

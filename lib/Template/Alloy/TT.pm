@@ -11,8 +11,9 @@ use warnings;
 
 use Template::Alloy;
 use Template::Alloy::Operator qw($QR_OP_ASSIGN);
-
 our $VERSION = $Template::Alloy::VERSION;
+our $QR_COMMENTS;
+our $QR_CX = ($^V < 5.009) ? '' : '+\s*'; # perl 5.10 allows possessive
 
 sub new { die "This class is a role for use by packages such as Template::Alloy" }
 
@@ -31,11 +32,13 @@ sub parse_tree_tt3 {
     local $self->{'START_TAG'}  = $self->{'START_TAG'} || $Template::Alloy::Parse::TAGS->{$STYLE}->[0];
     local $self->{'_start_tag'} = (! $self->{'INTERPOLATE'}) ? $self->{'START_TAG'} : qr{(?: $self->{'START_TAG'} | (\$))}sx;
 
-    our $QR_COMMENTS ||= $Template::Alloy::Parse::QR_COMMENTS; # must be our because we localise later on
+    local $QR_COMMENTS = local $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s* \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*$QR_CX"
+        if ! $QR_COMMENTS;
     my $dirs    = $Template::Alloy::Parse::DIRECTIVES;
     my $aliases = $Template::Alloy::Parse::ALIASES;
     local @{ $dirs }{ keys %$aliases } = values %$aliases; # temporarily add to the table
     local @{ $self }{@Template::Alloy::CONFIG_COMPILETIME} = @{ $self }{@Template::Alloy::CONFIG_COMPILETIME};
+    delete $dirs->{'JS'} if ! $self->{'COMPILE_JS'};
 
     my @tree;             # the parsed tree
     my $pointer = \@tree; # pointer to current tree to handle nested blocks
@@ -94,11 +97,11 @@ sub parse_tree_tt3 {
                 if ($$str_ref =~ m{ \G \{ }gcx) {
                     local $self->{'_operator_precedence'} = 0; # allow operators
                     $ref = $self->parse_expr($str_ref);
-                    $$str_ref =~ m{ \G \s* $QR_COMMENTS \} }gcxo
+                    $$str_ref =~ m{ \G \s* $QR_COMMENTS \} }gcx
                         || $self->throw('parse', 'Missing close }', undef, pos($$str_ref));
                 } else {
                     local $self->{'_operator_precedence'} = 1; # no operators
-                    local $QR_COMMENTS = qr{};
+                    local $QR_COMMENTS = local $Template::Alloy::Parse::QR_COMMENTS = qr{};
                     $ref = $self->parse_expr($str_ref);
                 }
                 $self->throw('parse', "Error while parsing for interpolated string", undef, pos($$str_ref))
@@ -235,15 +238,17 @@ sub parse_tree_tt3 {
 
                 ### allow for one more closing tag of the old style
                 if ($$str_ref =~ m{ \G \s* $QR_COMMENTS ([+~=-]?) $old_end }gcxs) {
+                    $QR_COMMENTS = $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s* \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*$QR_CX";
                     $post_chomp = $1 || $self->{'POST_CHOMP'};
                     $post_chomp =~ y/-=~+/1230/ if $post_chomp;
                     $continue = 0;
                     $post_op  = 0;
                     next;
                 }
+                $QR_COMMENTS = $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s* \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*$QR_CX";
 
             } elsif ($func eq 'META') {
-                unshift @meta, %{ $node->[3] }; # first defined win
+                unshift @meta, @{ $node->[3] }; # first defined win
                 $node->[3] = undef;             # only let these be defined once - at the front of the tree
             }
 
@@ -307,7 +312,7 @@ sub parse_tree_tt3 {
 
     ### cleanup the tree
     unshift(@tree, @blocks) if @blocks;
-    unshift(@tree, ['META', 1, 1, {@meta}]) if @meta;
+    unshift(@tree, ['META', 1, 1, \@meta]) if @meta;
     $self->throw('parse', "Missing END directive", $state[-1], pos($$str_ref)) if @state > 0;
 
     ### pull off the last text portion - if any
@@ -428,7 +433,7 @@ sub process {
             ### found error handler - try it out
             if (defined $file) {
                 $output = '';
-                local $copy->{'error'} = local $copy->{'e'} = $err;
+                local $copy->{'error'} = local $copy->{'e'} = $self->{'COMPILE_JS'} ? {type => $type, info => $err->info} : $err;
                 local $self->{'STREAM'} = undef if $self->{'WRAPPER'};
                 $self->_process($file, $copy, \$output);
             }
@@ -543,7 +548,7 @@ sub _load_template_meta {
         my $meta    = $doc->{'_perl'} ? $doc->{'_perl'}->{'meta'}
             : ($doc->{'_tree'} && ref($doc->{'_tree'}->[0]) && $doc->{'_tree'}->[0]->[0] eq 'META') ? $doc->{'_tree'}->[0]->[3]
             : {};
-
+        $meta = {@$meta} if ref($meta) eq 'ARRAY';
         $self->{'_template'} = $doc;
         @{ $doc }{keys %$meta} = values %$meta;
     };
@@ -1160,7 +1165,7 @@ $Template::Alloy::Parse::DIRECTIVES hashref.
 
 =head1 AUTHOR
 
-Paul Seamons <perl at seamons dot com>
+Paul Seamons <paul@seamons.com>
 
 =head1 LICENSE
 

@@ -40,6 +40,7 @@ sub parse_tree_velocity {
     my $aliases = $Template::Alloy::Parse::ALIASES;
     local @{ $dirs }{ keys %$aliases } = values %$aliases; # temporarily add to the table
     local @{ $self }{@Template::Alloy::CONFIG_COMPILETIME} = @{ $self }{@Template::Alloy::CONFIG_COMPILETIME};
+    delete $dirs->{'JS'} if ! $self->{'COMPILE_JS'};
 
     my @tree;             # the parsed tree
     my $pointer = \@tree; # pointer to current tree to handle nested blocks
@@ -261,7 +262,7 @@ sub parse_tree_velocity {
             $self->{'_no_interp'}++ if $dirs->{$node->[0]}->[5] # allow no_interp to turn on and off
 
         } elsif ($func eq 'META') {
-            unshift @meta, %{ $node->[3] }; # first defined win
+            unshift @meta, @{ $node->[3] }; # first defined win
             $node->[3] = undef;             # only let these be defined once - at the front of the tree
         }
 
@@ -292,7 +293,7 @@ sub parse_tree_velocity {
 
     ### cleanup the tree
     unshift(@tree, @blocks) if @blocks;
-    unshift(@tree, ['META', 1, 1, {@meta}]) if @meta;
+    unshift(@tree, ['META', 1, 1, \@meta]) if @meta;
     $self->throw('parse', "Missing end tag", $state[-1], pos($$str_ref)) if @state > 0;
 
     ### pull off the last text portion - if any
@@ -432,7 +433,7 @@ optimize.
 
 =head1 AUTHOR
 
-Paul Seamons <paul at seamons dot com>
+Paul Seamons <paul@seamons.com>
 
 =head1 LICENSE
 

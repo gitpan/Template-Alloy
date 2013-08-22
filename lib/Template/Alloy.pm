@@ -1,8 +1,8 @@
 package Template::Alloy;
 
 ###----------------------------------------------------------------###
-#  See the perldoc in Template/Alloy.pod
-#  Copyright 2007 - 2011 - Paul Seamons                              #
+#  See the perldoc in Template/Alloy.pod                             #
+#  Copyright 2007 - 2013 - Paul Seamons                              #
 #  Distributed under the Perl Artistic License without warranty      #
 ###----------------------------------------------------------------###
 
@@ -15,7 +15,7 @@ use Template::Alloy::VMethod  qw(define_vmethod $SCALAR_OPS $ITEM_OPS $ITEM_METH
 
 use vars qw($VERSION);
 BEGIN {
-    $VERSION            = '1.016';
+    $VERSION            = '1.018';
 };
 our $QR_PRIVATE         = qr/^[_.]/;
 our $WHILE_MAX          = 1000;
@@ -29,16 +29,18 @@ our @CONFIG_RUNTIME     = qw(ADD_LOCAL_PATH CALL_CONTEXT DUMP VMETHOD_FUNCTIONS 
 our $EVAL_CONFIG        = {map {$_ => 1} @CONFIG_COMPILETIME, @CONFIG_RUNTIME};
 our $EXTRA_COMPILE_EXT  = '.sto';
 our $PERL_COMPILE_EXT   = '.pl';
+our $JS_COMPILE_EXT     = '.js';
 our $GLOBAL_CACHE       = {};
 
 ###----------------------------------------------------------------###
 
 our $AUTOROLE = {
-    Compile  => [qw(compile_template compile_tree compile_expr)],
+    Compile  => [qw(load_perl compile_template compile_tree compile_expr)],
     HTE      => [qw(parse_tree_hte param output register_function clear_param query new_file new_scalar_ref new_array_ref new_filehandle)],
     Parse    => [qw(parse_tree parse_expr apply_precedence parse_args dump_parse_tree dump_parse_expr define_directive define_syntax)],
     Play     => [qw(play_tree _macro_sub)],
     Stream   => [qw(stream_tree)],
+    JS       => [qw(load_js compile_template_js compile_tree_js play_js js_context process_js parse_tree_js process_jsr parse_tree_jsr)],
     TT       => [qw(parse_tree_tt3 process)],
     Tmpl     => [qw(parse_tree_tmpl set_delimiters set_strip set_value set_values parse_string set_dir parse_file loop_iteration fetch_loop_iteration)],
     Velocity => [qw(parse_tree_velocity merge)],
@@ -69,7 +71,10 @@ sub import {
     my $class = shift;
     foreach my $item (@_) {
         next if $item =~ /^(load|1)$/i;
-        return $class->import(keys %$AUTOROLE) if lc $item eq 'all';
+        if (lc $item eq 'all') {
+            local $AUTOROLE->{'JS'}; delete $AUTOROLE->{'JS'};
+            return $class->import(keys %$AUTOROLE);
+        }
 
         my $type;
         if ($type = $STANDIN{$item}) {
@@ -163,12 +168,14 @@ sub _process {
         if ($self->{'STREAM'}) {
             $self->throw('process', 'No _tree found') if ! $doc->{'_tree'};
             $self->stream_tree($doc->{'_tree'});
+        } elsif ($self->{'COMPILE_JS'}) {
+            $self->play_js($doc, $out_ref);
         } elsif ($doc->{'_perl'}) {
             $doc->{'_perl'}->{'code'}->($self, $out_ref);
-        } elsif (! $doc->{'_tree'}) {
-            $self->throw('process', 'No _perl and no _tree found');
-        } else {
+        } elsif ($doc->{'_tree'}) {
             $self->play_tree($doc->{'_tree'}, $out_ref);
+        } else {
+            $self->throw('process', 'No _perl and no _tree found');
         }
 
         ### trim whitespace from the beginning and the end of a block or template
@@ -244,7 +251,8 @@ sub load_template {
             $self->throw('block', "Unsupported BLOCK type \"$block\"") if ref $block;
             $block = eval { $self->load_template(\$block) } || $self->throw('block', 'Parse error on predefined block');
         }
-        $doc->{'name'} = $file;
+        $doc->{'name'} = ($block->{'name'} && $block->{'name'} ne 'input text') ? $block->{'name'} : $file;
+        $doc->{'_filename'} = $block->{'_filename'} if $block->{'_filename'};
         if ($block->{'_perl'}) {
             $doc->{'_perl'} = $block->{'_perl'};
         } elsif ($block->{'_tree'}) {
@@ -280,6 +288,7 @@ sub load_template {
                             blocks => {},
                             code   => $ref->{'_perl'}->{'blocks'}->{$block_name}->{'_perl'}->{'code'},
                         } if $ref->{'_perl'} && $ref->{'_perl'}->{'blocks'} && $ref->{'_perl'}->{'blocks'}->{$block_name};
+                        $doc->{'_js'} = $self->load_js($doc) if $self->{'COMPILE_JS'} && $ref->{'_js'}; # have to regenerate because block is buried in js
                         return $doc;
                     }
               }
@@ -303,6 +312,8 @@ sub load_template {
     ### return perl - if they want perl - otherwise - the ast
     if (! $doc->{'_no_perl'} && $self->{'COMPILE_PERL'} && ($self->{'COMPILE_PERL'} ne '2' || $self->{'_tree'})) {
         $doc->{'_perl'} = $self->load_perl($doc);
+    } elsif ($self->{'COMPILE_JS'}) {
+        $self->load_js($doc);
     } else {
         $doc->{'_tree'} = $self->load_tree($doc);
     }
@@ -333,7 +344,13 @@ sub load_template {
 sub string_id {
     my ($self, $ref) = @_;
     require Digest::MD5;
-    my $sum   = Digest::MD5::md5_hex($$ref);
+    my $str = ref($self)
+        && $self->{'ENCODING'} # ENCODING is defined
+        && eval { require Encode } # Encode.pm is available
+        && defined &Encode::encode
+        ? Encode::encode($self->{'ENCODING'}, $$ref)
+        : $$ref;
+    my $sum = Digest::MD5::md5_hex($str);
     return 'Alloy_str_ref_cache/'.substr($sum,0,3).'/'.$sum;
 }
 
@@ -390,59 +407,6 @@ sub load_tree {
     return $tree;
 }
 
-sub load_perl {
-    my ($self, $doc) = @_;
-
-    ### first look for a compiled perl document
-    my $perl;
-    if ($doc->{'_filename'}) {
-        $doc->{'modtime'} ||= (stat $doc->{'_filename'})[9];
-        if ($self->{'COMPILE_DIR'} || $self->{'COMPILE_EXT'}) {
-            my $file = $doc->{'_filename'};
-            if ($self->{'COMPILE_DIR'}) {
-                $file =~ y|:|/| if $^O eq 'MSWin32';
-                $file = $self->{'COMPILE_DIR'} .'/'. $file;
-            } elsif ($doc->{'_is_str_ref'}) {
-                $file = ($self->include_paths->[0] || '.') .'/'. $file;
-            }
-            $file .= $self->{'COMPILE_EXT'} if defined($self->{'COMPILE_EXT'});
-            $file .= $PERL_COMPILE_EXT      if defined $PERL_COMPILE_EXT;
-
-            if (-e $file && ($doc->{'_is_str_ref'} || (stat $file)[9] == $doc->{'modtime'})) {
-                $perl = $self->slurp($file);
-            } else {
-                $doc->{'_compile_filename'} = $file;
-            }
-        }
-    }
-
-    $perl ||= $self->compile_template($doc);
-
-    ### save a cache on the fileside as asked
-    if ($doc->{'_compile_filename'}) {
-        my $dir = $doc->{'_compile_filename'};
-        $dir =~ s|/[^/]+$||;
-        if (! -d $dir) {
-            require File::Path;
-            File::Path::mkpath($dir);
-        }
-        open(my $fh, ">", $doc->{'_compile_filename'}) || $self->throw('compile', "Could not open file \"$doc->{'_compile_filename'}\" for writing: $!");
-        ### todo - think about locking
-        if ($self->{'ENCODING'} && eval { require Encode } && defined &Encode::encode) {
-            print {$fh} Encode::encode($self->{'ENCODING'}, $$perl);
-        } else {
-            print {$fh} $$perl;
-        }
-        close $fh;
-        utime $doc->{'modtime'}, $doc->{'modtime'}, $doc->{'_compile_filename'};
-    }
-
-    $perl = eval $$perl;
-    $self->throw('compile', "Trouble loading compiled perl: $@") if ! $perl && $@;
-
-    return $perl;
-}
-
 ###----------------------------------------------------------------###
 
 ### allow for resolving full expression ASTs
@@ -488,7 +452,7 @@ sub play_expr {
         if (UNIVERSAL::isa($ref, 'CODE')) {
             return $ref if $i >= $#$var && $ARGS->{'return_ref'};
             my @args = $args ? map { $self->play_expr($_) } @$args : ();
-            my $type = lc($self->{'CALL_CONTEXT'} || '');
+            my $type = $self->{'CALL_CONTEXT'} || '';
             if ($type eq 'item') {
                 $ref = $ref->(@args);
             } else {
@@ -592,19 +556,19 @@ sub play_expr {
             ### method calls on objects
             if ($was_dot_call && UNIVERSAL::can($ref, 'can')) {
                 return $ref if $i >= $#$var && $ARGS->{'return_ref'};
-                my $type = lc($self->{'CALL_CONTEXT'} || '');
+                my $type = $self->{'CALL_CONTEXT'} || '';
                 my @args = $args ? map { $self->play_expr($_) } @$args : ();
                 if ($type eq 'item') {
                     $ref = $ref->$name(@args);
+                    next;
+                } elsif ($type eq 'list') {
+                    $ref = [$ref->$name(@args)];
                     next;
                 }
                 my @results = eval { $ref->$name(@args) };
                 if ($@) {
                     my $class = ref $ref;
                     die $@ if ref $@ || $@ !~ /Can\'t locate object method "\Q$name\E" via package "\Q$class\E"/ || $type eq 'list';
-                } elsif ($type eq 'list') {
-                    $ref = \@results;
-                    next;
                 } elsif (defined $results[0]) {
                     $ref = ($#results > 0) ? \@results : $results[0];
                     next;
@@ -696,7 +660,7 @@ sub set_variable {
 
         ### check at each point if the returned thing was a code
         if (UNIVERSAL::isa($ref, 'CODE')) {
-            my $type = lc($self->{'CALL_CONTEXT'} || '');
+            my $type = $self->{'CALL_CONTEXT'} || '';
             my @args = $args ? map { $self->play_expr($_) } @$args : ();
             if ($type eq 'item') {
                 $ref = $ref->(@args);
@@ -742,7 +706,7 @@ sub set_variable {
         ### method calls on objects
         } elsif (UNIVERSAL::can($ref, 'can')) {
             my $lvalueish;
-            my $type = lc($self->{'CALL_CONTEXT'} || '');
+            my $type = $self->{'CALL_CONTEXT'} || '';
             my @args = $args ? map { $self->play_expr($_) } @$args : ();
             if ($i >= $#$var) {
                 $lvalueish = 1;
@@ -752,12 +716,14 @@ sub set_variable {
                 $ref = $ref->$name(@args);
                 return if $lvalueish;
                 next;
+            } elsif ($type eq 'list') {
+                $ref = [$ref->$name(@args)];
+                return if $lvalueish;
+                next;
             }
             my @results = eval { $ref->$name(@args) };
             if (! $@) {
-                if ($type eq 'list') {
-                    $ref = \@results;
-                } elsif (defined $results[0]) {
+                if (defined $results[0]) {
                     $ref = ($#results > 0) ? \@results : $results[0];
                 } elsif (defined $results[1]) {
                     die $results[1]; # TT behavior - why not just throw ?
@@ -943,6 +909,11 @@ sub node_info {
     my $doc = $self->{'_component'};
     my $i = $node->[1];
     my $j = $node->[2] || return ''; # META can be 0
+    return {
+        file => $doc->{'name'},
+        line => 'unknown',
+        text => 'unknown',
+    } if !$doc->{'_filename'} && !$doc->{'_content'};
     $doc->{'_content'} ||= $self->slurp($doc->{'_filename'});
     my $s = substr(${ $doc->{'_content'} }, $i, $j - $i);
     $s =~ s/^\s+//;
@@ -1012,6 +983,26 @@ sub tt_var_string {
         $v .= $ident->[$i++] if $i < @$ident;
     }
     return $v;
+}
+
+sub item_method_eval {
+    my $self = shift;
+    my $text = shift; return '' if ! defined $text;
+    my $args = shift || {};
+
+    local $self->{'_eval_recurse'} = $self->{'_eval_recurse'} || 0;
+    $self->throw('eval_recurse', "MAX_EVAL_RECURSE $Template::Alloy::MAX_EVAL_RECURSE reached")
+        if ++$self->{'_eval_recurse'} > ($self->{'MAX_EVAL_RECURSE'} || $MAX_EVAL_RECURSE);
+
+    my %ARGS;
+    @ARGS{ map {uc} keys %$args } = values %$args;
+    delete @ARGS{ grep {! $Template::Alloy::EVAL_CONFIG->{$_}} keys %ARGS };
+    $self->throw("eval_strict", "Cannot disable STRICT once it is enabled") if exists $ARGS{'STRICT'} && ! $ARGS{'STRICT'};
+
+    local @$self{ keys %ARGS } = values %ARGS;
+    my $out = '';
+    $self->process_simple(\$text, $self->_vars, \$out) || $self->throw($self->error);
+    return $out;
 }
 
 1;

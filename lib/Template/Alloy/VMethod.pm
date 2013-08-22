@@ -22,6 +22,10 @@ sub new { die "This class is a role for use by packages such as Template::Alloy"
 
 ###----------------------------------------------------------------###
 
+our ($JSON, $JSONP);
+sub json  { $JSON  ||= do { require JSON; JSON->new->utf8->allow_nonref->allow_unknown->allow_blessed->convert_blessed->canonical } }
+sub jsonp { $JSONP ||= do { require JSON; JSON->new->utf8->allow_nonref->allow_unknown->allow_blessed->convert_blessed->canonical->pretty } }
+
 our $SCALAR_OPS = our $ITEM_OPS = {
     '0'      => sub { $_[0] },
     abs      => sub { no warnings; abs shift },
@@ -30,16 +34,18 @@ our $SCALAR_OPS = our $ITEM_OPS = {
     collapse => sub { local $_ = $_[0]; s/^\s+//; s/\s+$//; s/\s+/ /g; $_ },
     cos      => sub { no warnings; cos $_[0] },
     defined  => sub { defined $_[0] ? 1 : '' },
+    dquote   => sub { local $_ = $_[0]; return if ! $_; s/([\"\\])/\\$1/g; s/\n/\\n/g; $_ },
     exp      => sub { no warnings; exp $_[0] },
     fmt      => \&vmethod_fmt_scalar,
     'format' => \&vmethod_format,
     hash     => sub { {value => $_[0]} },
     hex      => sub { no warnings; hex $_[0] },
-    html     => sub { local $_ = $_[0]; s/&/&amp;/g; s/</&lt;/g; s/>/&gt;/g; s/\"/&quot;/g; $_ },
+    html     => sub { local $_ = $_[0]; return $_ if ! $_; s/&/&amp;/g; s/</&lt;/g; s/>/&gt;/g; s/\"/&quot;/g; $_ },
     indent   => \&vmethod_indent,
     int      => sub { no warnings; int $_[0] },
     item     => sub { $_[0] },
     js       => sub { local $_ = $_[0]; return if ! $_; s/\n/\\n/g; s/\r/\\r/g; s/(?<!\\)([\"\'])/\\$1/g; $_ },
+    json     => sub { return json()->encode($_[0]) if ! $_[1]; my $j = jsonp()->encode($_[0]); chomp $j; $j },
     lc       => sub { lc $_[0] },
     lcfirst  => sub { lcfirst $_[0] },
     length   => sub { defined($_[0]) ? length($_[0]) : 0 },
@@ -63,6 +69,7 @@ our $SCALAR_OPS = our $ITEM_OPS = {
     split    => \&vmethod_split,
     sprintf  => sub { no warnings; my $pat = shift; sprintf($pat, @_) },
     sqrt     => sub { no warnings; sqrt $_[0] },
+    squote   => sub { local $_ = $_[0]; return if ! $_; s/([\'\\])/\\$1/g; $_ },
     srand    => sub { no warnings; srand $_[0]; '' },
     stderr   => sub { print STDERR $_[0]; '' },
     substr   => \&vmethod_substr,
@@ -76,10 +83,11 @@ our $SCALAR_OPS = our $ITEM_OPS = {
 };
 
 our $ITEM_METHODS = {
-    eval     => \&item_method_eval,
-    evaltt   => \&item_method_eval,
+    eval     => \&Template::Alloy::item_method_eval,
+    evaltt   => \&Template::Alloy::item_method_eval,
     file     => \&item_method_redirect,
     redirect => \&item_method_redirect,
+    block_exists => sub { defined($_[1]) && UNIVERSAL::isa($_[0], 'HASH') && $_[0]->{'BLOCKS'} && exists($_[0]->{'BLOCKS'}->{$_[1]}) || 0 },
 };
 
 our $FILTER_OPS = {}; # generally - non-dynamic filters belong in scalar ops
@@ -93,6 +101,7 @@ our $LIST_OPS = {
     import   => sub { my $ref = shift; push @$ref, grep {defined} map {ref eq 'ARRAY' ? @$_ : undef} @_; '' },
     item     => sub { $_[0]->[ $_[1] || 0 ] },
     join     => sub { my ($ref, $join) = @_; $join = ' ' if ! defined $join; no warnings; return join $join, @$ref },
+    json     => sub { return json()->encode($_[0]) if ! $_[1]; my $j = jsonp()->encode($_[0]); chomp $j; $j },
     last     => sub { my ($ref, $i) = @_; return $ref->[-1] if ! $i; return [@{$ref}[-$i .. -1]]},
     list     => sub { $_[0] },
     map      => sub { no warnings; my ($ref, $code) = @_; UNIVERSAL::isa($code, 'CODE') ? [map {$code->($_)} @$ref] : [map {$code} @$ref] },
@@ -128,6 +137,7 @@ our $HASH_OPS = {
     import   => sub { my ($a, $b) = @_; @{$a}{keys %$b} = values %$b if ref($b) eq 'HASH'; '' },
     item     => sub { my ($h, $k) = @_; $k = '' if ! defined $k; $Template::Alloy::QR_PRIVATE && $k =~ $Template::Alloy::QR_PRIVATE ? undef : $h->{$k} },
     items    => sub { [ %{ $_[0] } ] },
+    json     => sub { return json()->encode($_[0]) if ! $_[1]; my $j = jsonp()->encode($_[0]); chomp $j; $j },
     keys     => sub { [keys %{ $_[0] }] },
     list     => \&vmethod_list_hash,
     new      => sub { no warnings; return (@_ == 1 && ref $_[-1] eq 'HASH') ? $_[-1] : {@_} },
@@ -351,26 +361,6 @@ sub vmethod_url {
     utf8::upgrade($str) if defined &utf8::upgrade;
     $str =~ s/([^;\/?:@&=+\$,A-Za-z0-9\-_.!~*\'()])/sprintf('%%%02X', ord($1))/eg;
     return $str;
-}
-
-sub item_method_eval {
-    my $t    = shift;
-    my $text = shift; return '' if ! defined $text;
-    my $args = shift || {};
-
-    local $t->{'_eval_recurse'} = $t->{'_eval_recurse'} || 0;
-    $t->throw('eval_recurse', "MAX_EVAL_RECURSE $Template::Alloy::MAX_EVAL_RECURSE reached")
-        if ++$t->{'_eval_recurse'} > ($t->{'MAX_EVAL_RECURSE'} || $Template::Alloy::MAX_EVAL_RECURSE);
-
-    my %ARGS;
-    @ARGS{ map {uc} keys %$args } = values %$args;
-    delete @ARGS{ grep {! $Template::Alloy::EVAL_CONFIG->{$_}} keys %ARGS };
-    $t->throw("eval_strict", "Cannot disable STRICT once it is enabled") if exists $ARGS{'STRICT'} && ! $ARGS{'STRICT'};
-
-    local @{ $t }{ keys %ARGS } = values %ARGS;
-    my $out = '';
-    $t->process_simple(\$text, $t->_vars, \$out) || $t->throw($t->error);
-    return $out;
 }
 
 sub item_method_redirect {
@@ -600,6 +590,11 @@ Not available in TT - available in HTML::Template::Expr.
 =item int
 
     [% item.int %] Return the integer portion of the value (0 if none).
+
+=item json
+
+    [% item.json    %] Returns a JSON encoded representation.
+    [% item.json(1) %] Returns a pretty JSON encoded representation.
 
 =item lc
 
@@ -852,6 +847,11 @@ In Template::Alloy and TT3 you may also use normal regular expression notation.
     [% mylist.join %] Joins on space.
     [% mylist.join(", ") Joins on the passed argument.
 
+=item json
+
+    [% mylist.json    %] Returns a JSON encoded representation.
+    [% mylist.json(1) %] Returns a pretty JSON encoded representation.
+
 =item last
 
     [% mylist.last(3) %]  Returns a list of the last 3 items in the list.
@@ -1004,6 +1004,11 @@ and represent the keys to be deleted.
 
     [% myhash.items %] Returns a list of the key and values (flattened hash)
 
+=item json
+
+    [% myhash.json    %] Returns a JSON encoded representation.
+    [% myhash.json(1) %] Returns a pretty JSON encoded representation.
+
 =item keys
 
     [% myhash.keys.join(', ') %] Returns an arrayref of the keys of the hash.
@@ -1099,7 +1104,7 @@ found in the $VOBJS hash of Template::Alloy.
 
 =head1 AUTHOR
 
-Paul Seamons <perl at seamons dot com>
+Paul Seamons <paul@seamons.com>
 
 =head1 LICENSE
 
