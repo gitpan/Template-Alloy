@@ -13,7 +13,7 @@ use Template::Alloy;
 use Template::Alloy::Operator qw($QR_OP_ASSIGN);
 our $VERSION = $Template::Alloy::VERSION;
 our $QR_COMMENTS;
-our $QR_CX = ($^V < 5.009) ? '' : '+\s*'; # perl 5.10 allows possessive
+use constant posessive => ($^V >= 5.009) || 0; # perl 5.10 allows possessive
 
 sub new { die "This class is a role for use by packages such as Template::Alloy" }
 
@@ -32,8 +32,7 @@ sub parse_tree_tt3 {
     local $self->{'START_TAG'}  = $self->{'START_TAG'} || $Template::Alloy::Parse::TAGS->{$STYLE}->[0];
     local $self->{'_start_tag'} = (! $self->{'INTERPOLATE'}) ? $self->{'START_TAG'} : qr{(?: $self->{'START_TAG'} | (\$))}sx;
 
-    local $QR_COMMENTS = local $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s* \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*$QR_CX"
-        if ! $QR_COMMENTS;
+    local $QR_COMMENTS = $QR_COMMENTS || (posessive() ? (local $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s*+ \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*+ \\s*+") : $Template::Alloy::Parse::QR_COMMENTS);
     my $dirs    = $Template::Alloy::Parse::DIRECTIVES;
     my $aliases = $Template::Alloy::Parse::ALIASES;
     local @{ $dirs }{ keys %$aliases } = values %$aliases; # temporarily add to the table
@@ -238,14 +237,16 @@ sub parse_tree_tt3 {
 
                 ### allow for one more closing tag of the old style
                 if ($$str_ref =~ m{ \G \s* $QR_COMMENTS ([+~=-]?) $old_end }gcxs) {
-                    $QR_COMMENTS = $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s* \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*$QR_CX";
+                    $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s*+ \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*+ \\s*+" if posessive();
+                    $QR_COMMENTS = $Template::Alloy::Parse::QR_COMMENTS;
                     $post_chomp = $1 || $self->{'POST_CHOMP'};
                     $post_chomp =~ y/-=~+/1230/ if $post_chomp;
                     $continue = 0;
                     $post_op  = 0;
                     next;
                 }
-                $QR_COMMENTS = $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s* \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*$QR_CX";
+                $Template::Alloy::Parse::QR_COMMENTS = "(?sm: \\s*+ \\# .*? (?: \$ | (?=$self->{'_end_tag'}) ) )*+ \\s*+" if posessive();
+                $QR_COMMENTS = $Template::Alloy::Parse::QR_COMMENTS;
 
             } elsif ($func eq 'META') {
                 unshift @meta, @{ $node->[3] }; # first defined win
@@ -861,7 +862,7 @@ Allow for scientific notation. (TT3)
 
 =item
 
-Allow for hexidecimal input. (TT3)
+Allow for hexadecimal input. (TT3)
 
     [% a = 0xff0000 %][% a %] # = 16711680
 
@@ -928,7 +929,7 @@ TT2 requires them to contain something.
 
 Added a DUMP directive.
 
-Used for Data::Dumpering the passed variable or expression.
+Used for Data::Dumper'ing the passed variable or expression.
 
    [% DUMP a.a %]
 
@@ -998,7 +999,7 @@ and methods and will call in list context.  Item context will
 always call in item (scalar) context and will return one item.
 
 The @() and $() operators allow for functions embedded inside
-to use list and item context (respectively).  They are modelled
+to use list and item context (respectively).  They are modeled
 after the corresponding Perl 6 context specifiers.  See the
 Template::Alloy::Operators perldoc and CALL_CONTEXT configuration
 documentation for more information.
@@ -1091,7 +1092,7 @@ Alloy has better line information
 When debug dirs is on, directives on different lines separated
 by colons show the line they are on rather than a general line range.
 
-Parse errors actually know what line and character they occured at.
+Parse errors actually know what line and character they occurred at.
 
 =back
 
@@ -1118,7 +1119,7 @@ is no immediate plan to support the TT behavior.
 Full support is offered for the PLUGINS and LOAD_PERL configuration
 items.
 
-Also note that Template::Alloy only natively supports the Iterator
+Also note that Template::Alloy only has native support for the Iterator
 plugin.  Any of the other plugins requested will need to provided by
 installing Template::Toolkit or the appropriate plugin module.
 
